@@ -3,13 +3,15 @@
 // Board -> PC (ASCII lines, \r\n):
 //   spec text   "Entering STANDBY MODE", "Entering BATTLE MODE", "T: ...", "Laser charging: n/10",
 //               "Laser fired! Charge left: n/10", "Drone Was Attacked! ", "Rescued! ...", "Drone terminated ..."
-//   C,<pitch>,<roll>,<fire>,<range_mm>,<energy>   50 Hz in BATTLE_MODE (tilt controller)
+//   C,<pitch>,<roll>,<fire>,<range_mm>,<energy>,<joy_x>,<joy_y>   50 Hz in BATTLE_MODE (tilt controller;
+//                                                 joystick -100..100 % while the GUI is active, else 0)
 //   N,<alt_m>,<heading>                           2 Hz in BATTLE_MODE (barometer + magnetometer)
 //   A,<sec_left>,<FLIP|TOF>                       1 Hz while attacked
-//   Z,STATUS,<STANDBY|BATTLE>,<attacked>,<energy> reply to E,PING
+//   Z,STATUS,<STANDBY|BATTLE>,<attacked>,<energy>,<gui> reply to E,PING
+//   G,ON / G,OFF                                  GUI opened / closed (joystick held 0.5 s in BATTLE_MODE)
 // PC -> board:  E,PING  E,HIT  E,CHARGE  E,FIRE  E,WIPE,<sec>  E,SAFE  E,SCORE,<score>,<habitats>
-// While the game is connected the board does NOT auto-fire: the player fires
-// (hold the blue button >= 0.5 s, or E,FIRE from Space / click).
+// While the GUI is active the board does NOT auto-fire: the player fires
+// (hold the blue button >= 0.5 s, the joystick click, or E,FIRE from Space / click).
 
 export function parseLine(line) {
   let m;
@@ -17,7 +19,8 @@ export function parseLine(line) {
     const p = line.split(',');
     if (p.length >= 5) {
       return { type: 'tilt', pitch: +p[1], roll: +p[2], fire: p[3] === '1', range: +p[4],
-               energy: p.length > 5 ? +p[5] : undefined };
+               energy: p.length > 5 ? +p[5] : undefined,
+               jx: p.length > 7 ? +p[6] : 0, jy: p.length > 7 ? +p[7] : 0 };
     }
     return { type: 'junk', line };
   }
@@ -26,9 +29,11 @@ export function parseLine(line) {
     return { type: 'nav', alt: +p[1], hdg: +p[2] };
   }
   if ((m = /^A,(\d+),(\w+)/.exec(line))) return { type: 'attackTick', secs: +m[1], src: m[2] };
-  if ((m = /^Z,STATUS,(\w+),(\d),(\d+)/.exec(line))) {
-    return { type: 'status', mode: m[1], attacked: m[2] === '1', energy: +m[3] };
+  if ((m = /^Z,STATUS,(\w+),(\d),(\d+)(?:,(\d))?/.exec(line))) {
+    return { type: 'status', mode: m[1], attacked: m[2] === '1', energy: +m[3],
+             gui: m[4] === undefined ? undefined : m[4] === '1' };
   }
+  if (line === 'G,ON' || line === 'G,OFF') return { type: 'gui', on: line === 'G,ON' };
   if (line.includes('Entering STANDBY MODE')) return { type: 'mode', mode: 'STANDBY', text: line };
   if (line.includes('Entering BATTLE MODE')) return { type: 'mode', mode: 'BATTLE', text: line };
   if ((m = /Laser fired! Charge left: (\d+)\/10/.exec(line))) return { type: 'fired', energy: +m[1], text: line };

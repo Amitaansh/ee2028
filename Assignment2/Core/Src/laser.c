@@ -29,6 +29,7 @@ enum { M_DARK = 0, M_GLOW = 1, M_FULL = 2 };
 
 static uint16_t seq[MAX_STEPS];
 static uint8_t  seq_len, seq_idx, seq_active, glow_on, is_full;
+static uint8_t  inhibit, dot_on, dot_spent;     /* [ENH] real-life mode: safety inhibit, calibration dot */
 static uint32_t seq_t0, full_since;
 
 static volatile uint8_t mode = M_DARK;          /* read by the ISR */
@@ -50,10 +51,11 @@ void TIM7_IRQHandler(void)
 #endif
 
 /* what the pin should do when no shot is playing */
-static uint8_t rest_mode(void) { return (glow_on && glow_steps) ? M_GLOW : M_DARK; }
+static uint8_t rest_mode(void) { return dot_on ? M_FULL : (glow_on && glow_steps) ? M_GLOW : M_DARK; }
 
 static void set_mode(uint8_t m)
 {
+	if (inhibit) m = M_DARK;                        /* [ENH] person in the line of fire: nothing gets out */
 	if (m == M_FULL && !is_full) full_since = HAL_GetTick();
 	is_full = (m == M_FULL);
 	mode = m;
@@ -110,6 +112,7 @@ void laser_init(void)
 
 static void start(const uint16_t *ms, uint8_t n)
 {
+	if (inhibit) n = 0;                              /* [ENH] a shot while inhibited is dropped, not delayed */
 	if (n > MAX_STEPS) n = MAX_STEPS;
 	for (uint8_t i = 0; i < n; i++) seq[i] = ms[i];
 	seq_len = n;
@@ -140,9 +143,31 @@ void laser_glow(int on)
 	if (!seq_active) set_mode(rest_mode());
 }
 
+void laser_inhibit(int on)
+{
+	on = (on != 0);
+	if (inhibit == (uint8_t)on) return;
+	inhibit = (uint8_t)on;
+	if (on) { seq_active = 0; dot_on = 0; }          /* a shot or dot in progress stops at once */
+	set_mode(seq_active ? M_FULL : rest_mode());
+}
+
+void laser_dot(int on)
+{
+	if (!on) {
+		dot_spent = 0;
+		if (dot_on) { dot_on = 0; if (!seq_active) set_mode(rest_mode()); }
+		return;
+	}
+	if (dot_on || dot_spent || seq_active || inhibit) return;
+	dot_on = 1;
+	set_mode(M_FULL);
+}
+
 void laser_kill(void)
 {
 	seq_active = 0;
+	dot_on = 0;
 	glow_on = 0;
 	set_mode(M_DARK);
 #if ENH_LASER
@@ -162,5 +187,8 @@ void laser_update(uint32_t now)
 		if (seq_idx >= seq_len) { seq_active = 0; set_mode(rest_mode()); }
 		else set_mode((seq_idx & 1) == 0 ? M_FULL : M_DARK);   /* even = full, odd = dark gap */
 	}
-	if (is_full && now - full_since >= LASER_MAX_ON_MS) laser_cancel();   /* safety cut-off */
+	if (is_full && now - full_since >= LASER_MAX_ON_MS) {     /* safety cut-off */
+		if (dot_on) { dot_on = 0; dot_spent = 1; }       /* [ENH] the calibration dot needs an off first */
+		laser_cancel();
+	}
 }

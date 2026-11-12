@@ -10,6 +10,13 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { fx } from './fx.js';
 import { Street } from './street.js';
 import { Rain, Lightning } from './atmos.js';
+import { decodeCharacter, Crowd } from './characters.js';
+import { facadeTextures, asphaltTextures } from './textures.js';
+import { Details } from './details.js';
+import zombieMaleBin from '../assets/zombie_male.bin';
+import zombieFemaleBin from '../assets/zombie_female.bin';
+import workerBin from '../assets/survivor_worker.bin';
+import soldierBin from '../assets/survivor_soldier.bin';
 
 export const N = 14;            // city cells per side
 export const CELL = 90;         // metres per cell (block + road)
@@ -102,10 +109,12 @@ export class World {
     this._hordes();
     this._pylons();
     this._habitats();
+    this._survivors();
     this._fires();
     this._ash();
     this._env();
     this.street = new Street(this);
+    this.details = new Details(this);
     this.rain = new Rain(scene);
     this.lightning = new Lightning(this);
     this._fogColor = scene.fog.color.clone();
@@ -374,17 +383,30 @@ export class World {
     const rtex = new THREE.CanvasTexture(rc);
     rtex.anisotropy = tex.anisotropy;
     const mat = new THREE.MeshStandardMaterial({ map: tex, roughnessMap: rtex, roughness: 1, metalness: 0, envMapIntensity: 1.6 });
+    const asp = asphaltTextures(this.renderer);
     mat.onBeforeCompile = (sh) => {
+      sh.uniforms.uAspAlb = asp.alb; sh.uniforms.uAspNrm = asp.nrm;
       sh.vertexShader = sh.vertexShader
         .replace('#include <common>', '#include <common>\nvarying vec3 vGW;')
         .replace('#include <begin_vertex>', '#include <begin_vertex>\nvGW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
       sh.fragmentShader = sh.fragmentShader
-        .replace('#include <common>', `#include <common>\nvarying vec3 vGW;\n${NOISE_GLSL}`)
+        .replace('#include <common>', `#include <common>\nvarying vec3 vGW;\nuniform sampler2D uAspAlb; uniform sampler2D uAspNrm;\n${NOISE_GLSL}`)
         .replace('#include <map_fragment>', `#include <map_fragment>
           float zdG = zdN2(vGW.xz * 0.55) * 0.55 + zdN2(vGW.xz * 2.7) * 0.3 + zdN2(vGW.xz * 11.0) * 0.15;
-          diffuseColor.rgb *= 0.78 + 0.42 * zdG;`)
+          vec2 zdUV = vec2(vGW.x, -vGW.z) / 4.0;
+          vec3 zdA = texture2D(uAspAlb, zdUV).rgb;
+          vec3 zdN = texture2D(uAspNrm, zdUV).rgb;
+          diffuseColor.rgb *= (0.8 + 0.3 * zdG) * (0.35 + 1.6 * zdA);`)
         .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
-          roughnessFactor = clamp(roughnessFactor + (zdG - 0.5) * 0.3, 0.04, 1.0);`);
+          float zdWet = roughnessFactor;
+          roughnessFactor = clamp(roughnessFactor * (0.55 + 0.9 * zdN.b) + (zdG - 0.5) * 0.2, 0.03, 1.0);`)
+        .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+          {
+            float k = smoothstep(0.08, 0.3, zdWet);             // puddles stay mirror-flat
+            vec2 nxy = (zdN.rg * 2.0 - 1.0) * k;
+            vec3 nw = normalize(vec3(nxy.x, sqrt(max(0.0, 1.0 - dot(nxy, nxy))), -nxy.y));
+            normal = normalize((viewMatrix * vec4(nw, 0.0)).xyz);
+          }`);
     };
     const ground = new THREE.Mesh(new THREE.PlaneGeometry(size, size), mat);
     ground.rotation.x = -Math.PI / 2;
@@ -448,9 +470,12 @@ export class World {
     list.forEach((b, k) => { aStyle[k * 3] = b.style; aStyle[k * 3 + 1] = b.seed; aStyle[k * 3 + 2] = b.dark ? 1 : 0; });
     bgeo.setAttribute('aStyle', new THREE.InstancedBufferAttribute(aStyle, 3));
 
+    const facTex = facadeTextures(this.renderer);
     const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.86, metalness: 0.06 });
     mat.onBeforeCompile = (shader) => {
       shader.uniforms.uTime = { value: 0 };
+      shader.uniforms.uFacAlb = facTex.alb;     // shared uniform objects: switch to the real textures once decoded
+      shader.uniforms.uFacNrm = facTex.nrm;
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', '#include <common>\nattribute vec3 aStyle; varying vec3 vZdWorld; varying vec3 vZdNormal; varying vec3 vZdStyle; varying vec3 vZdLocal; varying vec3 vZdSize;')
         .replace('#include <begin_vertex>', `#include <begin_vertex>
@@ -470,61 +495,148 @@ export class World {
       shader.fragmentShader = shader.fragmentShader
         .replace('#include <common>', `#include <common>
           varying vec3 vZdWorld; varying vec3 vZdNormal; varying vec3 vZdStyle; varying vec3 vZdLocal; varying vec3 vZdSize; uniform float uTime;
-          ${NOISE_GLSL}`)
+          uniform highp sampler2DArray uFacAlb; uniform highp sampler2DArray uFacNrm;
+          ${NOISE_GLSL}
+          // interior mapping: ray from the glass into a box room (cs = room width/height, D = depth)
+          vec3 zRoom(vec2 lp, vec2 cs, float D, vec3 zd, float h, float shop) {
+            float tx = zd.x > 0.0 ? (cs.x - lp.x) / max(zd.x, 1e-4) : -lp.x / min(zd.x, -1e-4);
+            float ty = zd.y > 0.0 ? (cs.y - lp.y) / max(zd.y, 1e-4) : -lp.y / min(zd.y, -1e-4);
+            float tz = D / zd.z;
+            float t = min(min(tx, ty), tz);
+            vec3 hp = vec3(lp + zd.xy * t, zd.z * t);
+            vec3 wallC = mix(vec3(0.85, 0.72, 0.55), vec3(0.6, 0.72, 0.82), step(0.5, fract(h * 5.3)));
+            wallC = mix(wallC, vec3(0.8, 0.58, 0.62), step(0.75, fract(h * 3.1)));
+            vec3 surf; float k;
+            if (t == tz) {
+              surf = wallC; k = 0.9;
+              if (shop > 0.5) { surf = mix(vec3(0.75), vec3(0.95, 0.6, 0.3), step(0.5, fract(h * 7.0))) * (0.45 + 0.55 * step(0.3, fract(hp.y * 1.6))); }   // shelves
+              else {
+                float fx = fract(h * 11.0) * 0.5 + 0.1;
+                if (hp.y < cs.y * 0.3 && hp.x > cs.x * fx && hp.x < cs.x * (fx + 0.4)) surf *= 0.2;           // sofa / desk
+                if (fract(h * 29.0) > 0.6 && abs(hp.x - cs.x * 0.75) < 0.35 && hp.y > cs.y * 0.45 && hp.y < cs.y * 0.75) surf = mix(surf, vec3(0.9, 0.85, 0.7), 0.6);  // picture
+              }
+            } else if (t == tx) { surf = wallC * 0.75; k = 0.7; if (shop > 0.5) surf *= 0.45 + 0.55 * step(0.3, fract(hp.y * 1.6)); }
+            else if (zd.y < 0.0) { surf = shop > 0.5 ? vec3(0.55, 0.55, 0.52) : vec3(0.32, 0.22, 0.14); k = 0.6; }
+            else { surf = vec3(0.92, 0.9, 0.85); k = 1.15; if (shop > 0.5) k *= 0.6 + 1.2 * step(0.75, fract(hp.z * 0.5)); }
+            float lc = 1.0 - 0.55 * length((hp.xy - vec2(cs.x * 0.5, cs.y)) / cs);
+            return surf * k * (1.0 - 0.4 * hp.z / D) * clamp(lc, 0.3, 1.0);
+          }`)
         .replace('#include <color_fragment>', `#include <color_fragment>
           vec3 zn = normalize(vZdNormal);
           float zWall = 1.0 - step(0.5, abs(zn.y));
           // varyings that are constant per building still arrive with rounding noise: snap them,
           // otherwise the hashes below turn that noise into speckled windows
           float zStyle = floor(vZdStyle.x + 0.5), zSeed = floor(vZdStyle.y * 997.0 + 0.5) / 997.0, zDark = step(0.5, vZdStyle.z);
-          vec2 zp = abs(zn.x) > 0.5 ? vZdWorld.zy : vZdWorld.xy;
-          float zAlong = abs(zn.x) > 0.5 ? vZdLocal.z : vZdLocal.x;          // -0.5..0.5 across the facade
-          float zWidth = abs(zn.x) > 0.5 ? vZdSize.z : vZdSize.x;
-          float zEdge = (0.5 - abs(zAlong)) * zWidth;                       // metres to the building corner
-          float zTopDist = vZdSize.y - vZdWorld.y;                          // metres below the roof line
+          bool zX = abs(zn.x) > 0.5;
+          vec2 zp = zX ? vZdWorld.zy : vZdWorld.xy;
+          vec3 zU = zX ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);            // facade "right" axis (direction of zp.x)
+          float zAlong = zX ? vZdLocal.z : vZdLocal.x;                         // -0.5..0.5 across the facade
+          float zWidth = zX ? vZdSize.z : vZdSize.x;
+          float zEdge = (0.5 - abs(zAlong)) * zWidth;                          // metres to the building corner
+          float zTopDist = vZdSize.y - vZdWorld.y;                             // metres below the roof line
           vec2 zcs = zStyle < 0.5 ? vec2(3.3, 3.5) : zStyle < 1.5 ? vec2(1.7, 3.6) : zStyle < 2.5 ? vec2(2.7, 3.0) : vec2(3.3, 3.5);
           vec2 zcell = zp / zcs; vec2 zf = fract(zcell); vec2 zid = floor(zcell);
-          vec2 zface = floor(zn.xz * 2.0 + 2.5);          // +0.5: stable for exactly axis-aligned normals
+          vec2 zface = floor(zn.xz * 2.0 + 2.5);                               // +0.5: stable for exactly axis-aligned normals
           float zh = zdH2(zid + zface * 57.3 + zSeed * 91.0);
           float zfloor = zdH2(vec2(zid.y, zSeed * 33.0 + zface.x * 2.0 + zface.y * 3.0));
           vec4 zr = zStyle < 0.5 ? vec4(0.18, 0.82, 0.26, 0.82) : zStyle < 1.5 ? vec4(0.04, 0.96, 0.08, 0.94) : zStyle < 2.5 ? vec4(0.25, 0.75, 0.3, 0.78) : vec4(0.2, 0.8, 0.28, 0.8);
           float zWin = zWall * step(zr.x, zf.x) * step(zf.x, zr.y) * step(zr.z, zf.y) * step(zf.y, zr.w) * step(5.0, vZdWorld.y) * step(1.4, zEdge) * step(1.2, zTopDist);
           float zShop = zWall * step(vZdWorld.y, 4.4) * step(0.6, vZdWorld.y) * step(2.0, zEdge) * step(zStyle, 2.5);
-          // facade base colour
+          float zShopOn = zShop * step(0.8, zdH2(vec2(floor(zp.x / 9.0), zSeed * 17.0 + zface.x * 3.0 + zface.y * 5.0))) * (1.0 - zDark);
+          float zShopGlass = zShopOn * step(0.85, vZdWorld.y) * step(vZdWorld.y, 3.5) * step(0.05, fract(zp.x / 2.25));
+          float zShopBand = zShopOn * step(3.62, vZdWorld.y) * step(vZdWorld.y, 4.3);
+          // window: frame, mullion, glass, broken panes
+          vec2 zwl = vec2((zf.x - zr.x) / (zr.y - zr.x), (zf.y - zr.z) / (zr.w - zr.z));
+          float zInner = step(0.045, zwl.x) * step(zwl.x, 0.955) * step(0.05, zwl.y) * step(zwl.y, 0.95);
+          if (zStyle < 0.5 || zStyle > 1.5) zInner *= step(0.022, abs(zwl.x - 0.5));
+          float zGlass = zWin * zInner;
+          float zFrame = zWin - zGlass;
+          float zBroken = zGlass * (zStyle > 2.5 ? step(0.4, zh) : step(0.985, zh));
+          // wall material: concrete (office, glass-tower spandrels), brick (residential), plaster (burnt), shutters (shopfronts)
+          float zLayer = zStyle > 1.5 && zStyle < 2.5 ? 0.0 : zStyle > 2.5 ? 2.0 : 1.0;
+          float zTile = zLayer < 0.5 ? 2.0 : zLayer < 1.5 ? 4.5 : 2.4;
+          vec2 zuv = zp / zTile;
+          if (zShop > 0.5 && zShopOn < 0.5) { zLayer = 3.0; zuv = vec2(zp.x / 2.4, (zp.y - 0.6) / 3.8); }
+          if (zWall < 0.5) { zLayer = 1.0; zuv = vZdWorld.xz / 5.0; }
+          vec3 zTexA = texture(uFacAlb, vec3(zuv.x, -zuv.y, zLayer)).rgb;
+          vec4 zTexN = vec4(texture(uFacNrm, vec3(zuv.x, -zuv.y, zLayer)).rgb, zLayer);
+          float zTexL = dot(zTexA, vec3(0.3333));
+          vec3 zTint = diffuseColor.rgb;
+          if (zLayer < 0.5) diffuseColor.rgb = zTexA * mix(vec3(1.0), zTint * 8.0, 0.25);
+          else if (zLayer > 2.5) diffuseColor.rgb = zTexA * 0.8;
+          else diffuseColor.rgb = zTint * (0.25 + 2.6 * zTexL);
+          // weathering
           float zgrime = zdN2(zp * vec2(0.6, 0.12) + zSeed * 20.0);
           diffuseColor.rgb *= mix(0.72, 1.08, zgrime);
-          diffuseColor.rgb *= mix(0.55, 1.0, smoothstep(0.0, 14.0, vZdWorld.y));          // street grime / contact shadow
-          diffuseColor.rgb *= mix(0.6, 1.0, smoothstep(0.0, 1.6, zEdge));                 // corner shading
-          diffuseColor.rgb *= 1.0 - 0.18 * zWall * (1.0 - step(0.12, fract(zp.y / zcs.y)));  // floor slab lines
-          if (zStyle > 0.5 && zStyle < 1.5) diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.16, 0.2, 0.27), 0.65 * zWall);
-          if (zStyle > 1.5 && zStyle < 2.5) diffuseColor.rgb *= 1.0 - 0.25 * zWall * step(0.86, fract(zp.y / zcs.y));  // balconies
+          diffuseColor.rgb *= mix(0.5, 1.0, smoothstep(0.0, 14.0, vZdWorld.y));           // street grime / contact shadow
+          diffuseColor.rgb *= mix(0.6, 1.0, smoothstep(0.0, 1.6, zEdge));                  // corner shading
+          diffuseColor.rgb *= 1.0 - 0.15 * zWall * (1.0 - step(0.1, fract(zp.y / zcs.y))) * step(zLayer, 1.5);   // floor slab lines
+          if (zStyle > 0.5 && zStyle < 1.5) diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.14, 0.17, 0.22), 0.55 * zWall);
+          // rain streaks under window sills
+          diffuseColor.rgb *= 1.0 - 0.25 * zWall * step(zr.x, zf.x) * step(zf.x, zr.y) * step(zf.y, zr.z) * smoothstep(0.0, zr.z, zf.y) * zdN2(vec2(zp.x * 7.0, 0.0));
           float zSoot = 0.0;
           if (zStyle > 2.5) { zSoot = smoothstep(0.25, 0.75, zdN2(zp * 0.08 + zSeed * 7.0) + (vZdWorld.y / max(vZdSize.y, 1.0)) * 0.5); diffuseColor.rgb *= 1.0 - 0.75 * zSoot; }
-          diffuseColor.rgb *= 1.0 - 0.6 * zWin;
-          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.05, 0.05, 0.06), zShop * 0.6 * step(0.5, fract(vZdWorld.y * 2.4)));
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.018, 0.022, 0.03), zGlass);
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.05, 0.05, 0.055), zFrame);
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.01), zBroken);
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.04, 0.045, 0.05), zShopOn);
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.015, 0.018, 0.022), zShopGlass);
           if (zn.y > 0.5) diffuseColor.rgb *= 0.55 + 0.25 * zdN2(vZdWorld.xz * 0.4);`)
         .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
-          roughnessFactor = mix(roughnessFactor, zStyle > 0.5 && zStyle < 1.5 ? 0.08 : 0.18, zWin);
-          if (zStyle > 0.5 && zStyle < 1.5) roughnessFactor = mix(roughnessFactor, 0.25, zWall);`)
+          roughnessFactor = mix(0.7, 1.0, zTexN.b);
+          if (zStyle > 0.5 && zStyle < 1.5) roughnessFactor = mix(roughnessFactor, 0.3, zWall);
+          roughnessFactor = mix(roughnessFactor, zStyle > 0.5 && zStyle < 1.5 ? 0.05 : 0.1, zGlass);
+          roughnessFactor = mix(roughnessFactor, 1.0, zBroken);
+          roughnessFactor = mix(roughnessFactor, 0.08, zShopGlass);`)
         .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>
-          metalnessFactor = mix(metalnessFactor, 0.55, zWin);`)
+          metalnessFactor = mix(metalnessFactor, 0.5, zGlass * (1.0 - zBroken) + zShopGlass);
+          metalnessFactor = mix(metalnessFactor, 0.6, zFrame);`)
+        .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+          {
+            float k = zLayer < 0.5 ? 1.1 : zLayer > 2.5 ? 1.3 : 0.8;
+            vec2 nxy = (zTexN.rg * 2.0 - 1.0) * k;
+            float nz = sqrt(max(0.0, 1.0 - dot(nxy, nxy)));
+            vec3 nw = zWall > 0.5 ? normalize(zU * nxy.x + vec3(0.0, 1.0, 0.0) * nxy.y + zn * nz) : normalize(vec3(nxy.x, nz, nxy.y));
+            if (zWall > 0.5 && zGlass < 0.5 && zShopOn < 0.5) normal = normalize((viewMatrix * vec4(nw, 0.0)).xyz);
+            if (zWall < 0.5) normal = normalize((viewMatrix * vec4(nw, 0.0)).xyz);
+          }`)
         .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
           {
             float litRate = zStyle > 2.5 ? 0.06 : zStyle > 0.5 && zStyle < 1.5 ? 0.22 : 0.3;
             litRate *= 1.0 - 0.85 * zDark;
             float lit = step(1.0 - litRate, zh) + step(0.9, zfloor) * step(0.35, zh) * step(zStyle, 1.5) * (1.0 - zDark);
             lit = min(lit, 1.0);
-            vec3 wc = mix(vec3(1.0, 0.58, 0.26), vec3(0.55, 0.74, 1.0), step(0.66, fract(zh * 13.7)));
-            if (fract(zh * 7.3) > 0.9) wc = vec3(0.35, 0.45, 1.0) * (0.5 + 0.5 * zdH2(vec2(floor(uTime * 6.0 + zh * 50.0), zh)));  // TV flicker
-            float flick = 0.82 + 0.18 * sin(uTime * (2.0 + zh * 9.0) + zh * 40.0);
-            float glowIn = 0.75 + 0.25 * zf.y;
-            totalEmissiveRadiance += zWin * lit * wc * 1.45 * flick * glowIn;
-            // burnt buildings: embers glowing in a few lower windows
-            if (zStyle > 2.5) totalEmissiveRadiance += zWin * step(0.9, zh) * step(vZdWorld.y, 30.0) * vec3(1.0, 0.32, 0.06) * (0.8 + 0.6 * sin(uTime * 7.0 + zh * 30.0));
-            // a few shops still running on generators
-            float shop = step(0.86, zdH2(vec2(floor(zp.x / 9.0), zSeed * 17.0 + zface.x * 3.0 + zface.y * 5.0))) * (1.0 - zDark);
-            vec3 sc = mix(vec3(0.2, 0.9, 1.0), vec3(1.0, 0.25, 0.7), step(0.5, fract(zSeed * 9.1 + zp.x * 0.01)));
-            totalEmissiveRadiance += zShop * shop * step(1.2, vZdWorld.y) * sc * 0.9;
+            vec3 wc = mix(vec3(1.0, 0.62, 0.32), vec3(0.6, 0.76, 1.0), step(0.66, fract(zh * 13.7)));
+            float tv = step(0.9, fract(zh * 7.3));
+            float flick = 0.85 + 0.15 * sin(uTime * (2.0 + zh * 9.0) + zh * 40.0);
+            // ---- parallax room behind the glass (interior mapping) ----
+            vec3 zV = normalize(vZdWorld - cameraPosition);
+            vec3 zd = vec3(dot(zV, zU), zV.y, max(dot(zV, -zn), 0.04));
+            vec2 lp = zf * zcs;
+            vec3 room = zRoom(lp, zcs, zStyle > 0.5 && zStyle < 1.5 ? 7.0 : 4.5, zd, zh, 0.0);
+            // curtains / blinds just behind the glass
+            float cw = fract(zh * 17.0) > 0.45 ? 0.2 + 0.15 * fract(zh * 41.0) : 0.0;
+            float curtain = (zStyle < 0.5 || (zStyle > 1.5 && zStyle < 2.5)) ? min(1.0, step(zwl.x, cw) + step(1.0 - cw, zwl.x)) : 0.0;
+            float blinds = (zStyle < 1.5 && fract(zh * 53.0) > 0.7) ? step(0.5, fract(zwl.y * 14.0)) * step(1.0 - fract(zh * 3.7) * 0.8, zwl.y) : 0.0;
+            vec3 curtC = mix(vec3(0.75, 0.32, 0.2), vec3(0.32, 0.42, 0.65), fract(zh * 23.0));
+            room = mix(room, curtC * 0.85, curtain);
+            room = mix(room, vec3(0.8, 0.78, 0.7), blinds * 0.85);
+            vec3 tvc = vec3(0.35, 0.45, 1.0) * (0.5 + 0.5 * zdH2(vec2(floor(uTime * 6.0 + zh * 50.0), zh)));
+            vec3 lightC = mix(wc, tvc, tv);
+            float glass = zGlass * (1.0 - zBroken);
+            totalEmissiveRadiance += glass * lit * lightC * 1.7 * flick * room;
+            totalEmissiveRadiance += glass * (1.0 - lit) * room * vec3(0.5, 0.55, 0.7) * 0.025;   // dark rooms, faint moonlight
+            // burnt buildings: fire glowing inside some broken windows
+            if (zStyle > 2.5) totalEmissiveRadiance += zBroken * step(0.82, zh) * step(vZdWorld.y, 30.0) * vec3(1.0, 0.32, 0.06) * (0.9 + 0.6 * sin(uTime * 7.0 + zh * 30.0)) * (0.6 + 0.6 * room.r);
+            // a few shops still running on generators: lit interior behind the glass, glowing sign band
+            if (zShopOn > 0.5) {
+              float sh = zdH2(vec2(floor(zp.x / 9.0), zSeed * 13.0 + zface.y));
+              vec3 sc = sh < 0.33 ? vec3(0.2, 0.9, 1.0) : sh < 0.66 ? vec3(1.0, 0.25, 0.7) : vec3(1.0, 0.75, 0.3);
+              vec3 shopRoom = zRoom(vec2(fract(zp.x / 9.0) * 9.0, vZdWorld.y - 0.6), vec2(9.0, 3.8), 7.0, zd, sh, 1.0);
+              totalEmissiveRadiance += zShopGlass * shopRoom * mix(vec3(1.0, 0.95, 0.85), sc, 0.35) * 1.5 * flick;
+              float letters = step(0.35, zdH2(floor(vec2(zp.x * 2.2, vZdWorld.y * 3.0)))) * step(0.12, fract(zp.x * 2.2)) * step(abs(vZdWorld.y - 3.96), 0.22) * step(0.6, fract(zp.x / 9.0 + 0.3)) ;
+              totalEmissiveRadiance += zShopBand * sc * (0.35 + 1.6 * letters);
+            }
             // lit crown band on some towers
             float crown = step(60.0, vZdSize.y) * step(0.55, zSeed) * zWall * step(zTopDist, 2.2) * step(0.6, zTopDist) * (1.0 - zDark);
             totalEmissiveRadiance += crown * mix(vec3(0.3, 0.85, 1.0), vec3(1.0, 0.85, 0.6), step(0.8, zSeed)) * 1.6;
@@ -605,18 +717,25 @@ export class World {
     fg.fillStyle = '#4e5560'; fg.fillRect(0, 0, 512, 256);
     for (let y = 0; y < 3; y++) for (let x = 0; x < 9; x++) {
       const lit = (x * 7 + y * 3) % 5 !== 0;
-      fg.fillStyle = lit ? '#bfeaff' : '#111820';
+      fg.fillStyle = '#20262e'; fg.fillRect(11 + x * 55, 27 + y * 72, 46, 46);          // frame
+      fg.fillStyle = lit ? '#9fd8ee' : '#0c1218';
       fg.fillRect(14 + x * 55, 30 + y * 72, 40, 40);
+      if (lit) { fg.fillStyle = 'rgba(20,40,60,0.55)'; for (let b = 0; b < 40; b += 5) fg.fillRect(14 + x * 55, 30 + y * 72 + b, 40, 2); }   // blinds
     }
     fg.fillStyle = '#3ae6ff'; fg.fillRect(0, 0, 512, 6); fg.fillRect(0, 250, 512, 6);
     const ftex = new THREE.CanvasTexture(fc); ftex.colorSpace = THREE.SRGBColorSpace;
     const ec = document.createElement('canvas'); ec.width = 512; ec.height = 256;
     const eg = ec.getContext('2d'); eg.drawImage(fc, 0, 0); eg.globalCompositeOperation = 'multiply'; eg.fillStyle = '#000'; eg.fillRect(0, 0, 512, 256);
     eg.globalCompositeOperation = 'source-over';
-    for (let y = 0; y < 3; y++) for (let x = 0; x < 9; x++) { if ((x * 7 + y * 3) % 5 !== 0) { eg.fillStyle = '#7fd8ff'; eg.fillRect(14 + x * 55, 30 + y * 72, 40, 40); } }
+    for (let y = 0; y < 3; y++) for (let x = 0; x < 9; x++) {
+      if ((x * 7 + y * 3) % 5 !== 0) {
+        eg.fillStyle = '#5fb8d8'; eg.fillRect(14 + x * 55, 30 + y * 72, 40, 40);
+        eg.fillStyle = 'rgba(0,0,0,0.6)'; for (let b = 0; b < 40; b += 5) eg.fillRect(14 + x * 55, 30 + y * 72 + b, 40, 2);
+      }
+    }
     eg.fillStyle = '#3ae6ff'; eg.fillRect(0, 0, 512, 6); eg.fillRect(0, 250, 512, 6);
     const etex = new THREE.CanvasTexture(ec); etex.colorSpace = THREE.SRGBColorSpace;
-    const side = new THREE.MeshStandardMaterial({ map: ftex, emissiveMap: etex, emissive: 0xffffff, emissiveIntensity: 1.2, roughness: 0.5, metalness: 0.2 });
+    const side = new THREE.MeshStandardMaterial({ map: ftex, emissiveMap: etex, emissive: 0xffffff, emissiveIntensity: 0.55, roughness: 0.35, metalness: 0.3 });
     const roof = new THREE.MeshStandardMaterial({ color: 0x3a3f48, roughness: 0.8 });
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(lab.w, lab.h, lab.d), [side, side, roof, roof, side, side]);
     mesh.position.set(lab.x, lab.h / 2, lab.z);
@@ -826,6 +945,31 @@ export class World {
       this.hordes.push(horde);
     });
     this.scene.add(this.zMesh);
+    this._zombieCrowds();
+  }
+
+  // animated Quaternius zombies (High); the procedural ones above stay as the Low / fallback version
+  _zombieCrowds() {
+    const r2 = this.rng2;
+    this.crowds = null;
+    try {
+      const models = [decodeCharacter(zombieMaleBin), decodeCharacter(zombieFemaleBin)];
+      const pick = this.zombies.map(() => (r2() < 0.55 ? 0 : 1));
+      const opts = { glow: ['Face'], tint: ['Clothes', 'Pants', 'DarkClothes', 'Hair'], glowColor: 0xff2a10, glowStrength: 3.5 };
+      this.crowds = models.map((m, k) => new Crowd(this.scene, m, Math.max(1, pick.filter((p) => p === k).length), opts));
+      const tints = [0x9a8a7a, 0x6a7a9a, 0x8a5a4a, 0x5a6a4a, 0x9a9a9a, 0x7a4a6a, 0x4a5a7a, 0xa08060];
+      const n = [0, 0], col = new THREE.Color();
+      this.zombies.forEach((z, k) => {
+        z.crowd = this.crowds[pick[k]]; z.ci = n[pick[k]]++;
+        z.at = r2() * 4; z.clip = 'Walk';
+        col.setHex(tints[Math.floor(r2() * tints.length)]).multiplyScalar(0.8 + r2() * 0.5);
+        z.crowd.setTint(z.ci, col);
+      });
+      this.zMesh.visible = false;
+    } catch (e) {
+      console.warn('[ZD] animated zombies unavailable, using the procedural ones:', e);
+      this.crowds = null;
+    }
   }
 
   // ------------------------------------------------------------ charging pylons (safe zones)
@@ -958,6 +1102,55 @@ export class World {
     });
   }
 
+  // ------------------------------------------------------------ survivors (Quaternius, animated)
+  // workers inside every habitat dome (cheer once the habitat is found), soldiers guarding
+  // the dome entrances and the lab plaza
+  _survivors() {
+    const r = rngFrom(5150);
+    this.survivors = [];
+    try {
+      const wk = decodeCharacter(workerBin), sd = decodeCharacter(soldierBin);
+      const per = 7;
+      const plazaGuards = [[-70, -70], [70, -70], [-70, 70], [70, 70], [-14, -80], [14, 80]];
+      this.workerCrowd = new Crowd(this.scene, wk, this.habitats.length * per, { tint: ['Shirt', 'Pants', 'Vest', 'Hat'] });
+      this.soldierCrowd = new Crowd(this.scene, sd, this.habitats.length * 2 + plazaGuards.length, { tint: [] });
+      const col = new THREE.Color();
+      let wi = 0, si = 0;
+      const addS = (crowd, i, x, z, yaw, h, clip) => this.survivors.push({ crowd, i, x, z, yaw, h, clip, at: r() * 4, rate: 0.8 + r() * 0.4, scale: 1.9 + r() * 0.25 });
+      for (const h of this.habitats) {
+        for (let k = 0; k < per; k++) {
+          const a = r() * Math.PI * 2, d = 3 + r() * 10;
+          col.setHSL(r(), 0.35, 0.35 + r() * 0.25);
+          this.workerCrowd.setTint(wi, col);
+          addS(this.workerCrowd, wi++, h.x + Math.cos(a) * d, h.z + Math.sin(a) * d, r() * Math.PI * 2, h, 'Idle');
+        }
+        for (let k = 0; k < 2; k++) {
+          const a = r() * Math.PI * 2, x = h.x + Math.cos(a) * 21, z = h.z + Math.sin(a) * 21;
+          addS(this.soldierCrowd, si++, x, z, Math.atan2(x - h.x, z - h.z), h, 'Idle');
+        }
+      }
+      for (const [x, z] of plazaGuards) addS(this.soldierCrowd, si++, x, z, Math.atan2(x, z), null, 'Idle');
+    } catch (e) {
+      console.warn('[ZD] survivors unavailable:', e);
+      this.survivors = [];
+    }
+  }
+
+  _animateSurvivors(dt, t) {
+    if (!this.survivors.length) return;
+    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), Y = new THREE.Vector3(0, 1, 0), p = new THREE.Vector3(), s = new THREE.Vector3();
+    for (const v of this.survivors) {
+      const cheer = v.h && v.h.found && v.crowd === this.workerCrowd;
+      const clip = cheer ? 'Victory' : v.clip;
+      v.at += dt * v.rate;
+      p.set(v.x, 0, v.z); q.setFromAxisAngle(Y, v.yaw); s.setScalar(v.scale);
+      m.compose(p, q, s);
+      v.crowd.setMatrix(v.i, m);
+      v.crowd.setAnim(v.i, clip, v.at, true, 0);
+    }
+    this.workerCrowd.commit(t); this.soldierCrowd.commit(t);
+  }
+
   // ------------------------------------------------------------ fires + ash
   _fires() {
     const r = this.rng;
@@ -1007,6 +1200,10 @@ export class World {
     this.rain.setQuality(q);
     this.street.setQuality(q);
     this.ash.geometry.setDrawRange(0, hi ? 900 : 400);
+    if (this.crowds) {
+      for (const c of this.crowds) c.mesh.visible = hi;
+      this.zMesh.visible = !hi;
+    }
   }
 
   // ------------------------------------------------------------ queries
@@ -1094,9 +1291,9 @@ export class World {
       const ready = p.cooldown <= 0;
       p.cooldown = Math.max(0, p.cooldown - dt);
       p.ring.material.emissiveIntensity = ready ? 2.0 + Math.sin(t * 4) * 0.6 : 0.3;
-      p.beam.material.uniforms.uOpacity.value = (ready ? 0.3 : 0.07) * camNear(p.x, p.z);
+      p.beam.material.uniforms.uOpacity.value = (ready ? 0.17 : 0.05) * camNear(p.x, p.z);
       p.beam.material.uniforms.uTime.value = t;
-      p.halo.material.opacity = ready ? 0.32 : 0.06;
+      p.halo.material.opacity = ready ? 0.22 : 0.05;
       p.membrane.material.uniforms.uTime.value = t;
       p.membrane.material.uniforms.uOn.value = ready ? 1 : 0.15;
       p.pool.material.opacity = ready ? 1 : 0.3;
@@ -1113,7 +1310,7 @@ export class World {
       const pulse = 0.55 + 0.35 * Math.sin(t * 3 + h.x);
       h.ring.material.opacity = h.cleared ? 0.25 : pulse;
       h.ring.material.color.setHex(h.cleared ? 0x3aff6a : 0xff2a1a);
-      h.glow.material.opacity = h.cleared ? 0.0 : pulse * 0.5;
+      h.glow.material.opacity = h.cleared ? 0.0 : pulse * 0.28;
       h.dash.rotation.y += dt * (h.cleared ? 0.05 : 0.25);
       h.dash.material.color.setHex(h.cleared ? 0x3aff6a : 0xff3a2a);
       h.dash.material.opacity = h.cleared ? 0.3 : 0.8;
@@ -1146,8 +1343,10 @@ export class World {
     }
 
     this.street.update(dt, t, camera);
+    this.details.update(dt, t);
     this.rain.update(dt, t, camera, drone, this.flash);
     this._animateZombies(dt, t, drone);
+    this._animateSurvivors(dt, t);
     fx.update(dt, camera, this.scene.fog);
   }
 
@@ -1156,6 +1355,8 @@ export class World {
     const dx = drone ? drone.pos.x : 1e9, dz = drone ? drone.pos.z : 1e9, dy = drone ? drone.pos.y : 1e9;
     const A = this.zAnim.array;
     const qual = this.quality === 'low' ? 0.4 : 1;
+    const crowd = this.crowds && this.quality !== 'low';
+    const q2 = new THREE.Quaternion(), Y = new THREE.Vector3(0, 1, 0);
     for (const z of this.zombies) {
       const i4 = z.idx * 4;
       if (z.dead) {
@@ -1166,11 +1367,20 @@ export class World {
         const burn = Math.min(1, z.deadT / 1.6);
         const sink = Math.max(0, z.deadT - 1.2) * 1.1;
         const shrink = Math.max(0, 1 - Math.max(0, z.deadT - 1.4) / 0.8);
-        p.set(z.x, -sink, z.z);
-        e.set(-fall * 1.35, z.yaw, fall * 0.25 * z.fallDir); q.setFromEuler(e); s.setScalar(z.scale * Math.max(0.0001, shrink));
-        m.compose(p, q, s);
-        this.zMesh.setMatrixAt(z.idx, m);
-        A[i4] = z.walk; A[i4 + 1] = 0; A[i4 + 2] = 0; A[i4 + 3] = Math.min(1, burn * 1.1);
+        if (crowd) {
+          // Death clip (sped up), then burn, sink and crumble
+          const burnC = Math.min(1, Math.max(0, (z.deadT - 0.15) / 1.5));
+          p.set(z.x, -sink, z.z); q2.setFromAxisAngle(Y, z.yaw); s.setScalar(z.scale * Math.max(0.0001, shrink));
+          m.compose(p, q2, s);
+          z.crowd.setMatrix(z.ci, m);
+          z.crowd.setAnim(z.ci, 'Death', z.deadT * 1.7, false, burnC);
+        } else {
+          p.set(z.x, -sink, z.z);
+          e.set(-fall * 1.35, z.yaw, fall * 0.25 * z.fallDir); q.setFromEuler(e); s.setScalar(z.scale * Math.max(0.0001, shrink));
+          m.compose(p, q, s);
+          this.zMesh.setMatrixAt(z.idx, m);
+          A[i4] = z.walk; A[i4 + 1] = 0; A[i4 + 2] = 0; A[i4 + 3] = Math.min(1, burn * 1.1);
+        }
         if (z.deadT < 1.9 && shrink > 0) {
           z.facc = (z.facc || 0) + dt * 16 * qual;
           while (z.facc >= 1) { z.facc -= 1; fx.flame(z.x + (Math.random() - 0.5) * 2, 0.3, z.z + (Math.random() - 0.5) * 2, 2.2 + Math.random() * 1.5, 0.8); }
@@ -1201,14 +1411,29 @@ export class World {
       z.walk += dt * (moving ? sp * 2.4 + 0.6 : 0.6);
       const reach = near && dy < 40 ? 1 : 0;
       z.reach = (z.reach || 0) + (reach - (z.reach || 0)) * Math.min(1, dt * 4);
-      p.set(z.x, Math.abs(Math.sin(z.walk)) * 0.06 * moving + z.reach * Math.abs(Math.sin(t * 7 + z.phase)) * 0.5, z.z);
-      e.set(near ? -0.3 : 0.12, z.yaw, Math.sin(z.walk * 0.5 + z.phase) * 0.1);
-      q.setFromEuler(e); s.setScalar(z.scale);
-      m.compose(p, q, s);
-      this.zMesh.setMatrixAt(z.idx, m);
-      A[i4] = z.walk; A[i4 + 1] = moving ? Math.min(1, 0.4 + sp * 0.3) : 0.1; A[i4 + 2] = z.reach; A[i4 + 3] = 0;
+      if (crowd) {
+        // clip by behaviour: idle, shambling walk, run at the drone, claw at it when it is low and close
+        const close = near && dy < 40 && Math.hypot(dx - z.x, dz - z.z) < 16;
+        let clip = 'Idle', rate = 1;
+        if (close) { clip = 'Punch'; rate = 0.9 + (z.phase % 1) * 0.3; }
+        else if (near && moving) { clip = 'Run'; rate = Math.min(1.2, Math.max(0.55, sp / 6)); }
+        else if (moving) { clip = 'Walk'; rate = Math.max(0.45, sp / 2.7); }
+        z.clip = clip;
+        z.at += dt * rate;
+        p.set(z.x, 0, z.z); q2.setFromAxisAngle(Y, z.yaw); s.setScalar(z.scale);
+        m.compose(p, q2, s);
+        z.crowd.setMatrix(z.ci, m);
+        z.crowd.setAnim(z.ci, clip, z.at, true, 0);
+      } else {
+        p.set(z.x, Math.abs(Math.sin(z.walk)) * 0.06 * moving + z.reach * Math.abs(Math.sin(t * 7 + z.phase)) * 0.5, z.z);
+        e.set(near ? -0.3 : 0.12, z.yaw, Math.sin(z.walk * 0.5 + z.phase) * 0.1);
+        q.setFromEuler(e); s.setScalar(z.scale);
+        m.compose(p, q, s);
+        this.zMesh.setMatrixAt(z.idx, m);
+        A[i4] = z.walk; A[i4 + 1] = moving ? Math.min(1, 0.4 + sp * 0.3) : 0.1; A[i4 + 2] = z.reach; A[i4 + 3] = 0;
+      }
     }
-    this.zMesh.instanceMatrix.needsUpdate = true;
-    this.zAnim.needsUpdate = true;
+    if (crowd) for (const c of this.crowds) c.commit(t);
+    else { this.zMesh.instanceMatrix.needsUpdate = true; this.zAnim.needsUpdate = true; }
   }
 }

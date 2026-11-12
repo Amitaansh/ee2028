@@ -20,12 +20,15 @@
 #include "hud.h"
 #include "tof.h"
 #include "laser.h"
+#include "turret.h"
+#include "tele_oled.h"
+#include "button.h"
 #include <stdio.h>
 
 static uint8_t  oled_ok;
 static int      cur_battle, cur_attacked, cur_energy;
 static uint32_t t_boot, t_battle, t_tilt, t_nav, t_hud;
-static uint8_t  fire_flag;
+static uint8_t  fire_flag, fire_flag_req;
 
 static uint8_t  attack_tof;
 static uint32_t attack_t0, rescued_until;
@@ -35,6 +38,17 @@ static int      last_wipe = -1;
 static uint32_t zone_clear_until;
 static uint32_t t_button;                       /* last time the blue button was down */
 static uint32_t tof_dbg_until, t_tofdbg;        /* E,TOF */
+static uint32_t joy_dbg_until, t_joydbg;        /* E,JOY */
+static uint8_t  tof_warned;                     /* "something is on the ToF" said once per BATTLE */
+static uint8_t  tele_ok, turret_ok, aim_manual;  /* second OLED, turret, MANUAL AIM sub-mode */
+static uint8_t  gui;                             /* GUI (PC game) active: joystick hold in BATTLE */
+static uint8_t  rl, rl_fresh, rl_flags, rl_safe; /* REAL-LIFE mode (game tab), fresh E,AIM, its flags, SAFE latch */
+static float    rl_pan, rl_tilt;                 /* aim from the PC (degrees) */
+static uint32_t fired_until;
+#if ENH_TURRET && TURRET_AIM_LOG_MS > 0
+static uint32_t t_aimlog;
+#endif
+static UI_State ui;
 
 void enh_init(void)
 {
@@ -46,10 +60,17 @@ void enh_init(void)
 	game_link_init();
 #endif
 	buzzer_init();
+#if ENH_TELE_OLED
+	tele_ok = (uint8_t)(UI_Init() != 0);              /* splash: "keep joystick centred" */
+#endif
 #if ENH_OLED
-	oled_ok = (uint8_t)oled_init();
+	oled_ok = (uint8_t)oled_init();                   /* HUD OLED, never on I2C1 or the turret pins */
 #endif
 	tof_init();
+#if ENH_TURRET
+	turret_ok = (uint8_t)turret_init();               /* measures the joystick centre: don't touch it */
+	turret_limits(&ui.pan_left, &ui.pan_right, &ui.tilt_down, &ui.tilt_up);
+#endif
 
 	/* buzzer self-test: three clear beeps at every boot */
 	for (int i = 0; i < 3; i++) { buzzer_blocking_tone(120); HAL_Delay(100); }
@@ -62,12 +83,33 @@ void enh_init(void)
 	sprintf(b, "[ZD] Zombie Drone add-ons | build %s %s | CLK %luMHz\r\n", __DATE__, __TIME__,
 			(unsigned long)(HAL_RCC_GetSysClockFreq() / 1000000UL));
 	send(b);
-	sprintf(b, "[ZD] OLED %s%s | TOF %s | BUZZER on PA3 (Grove D4): 3 beeps at boot\r\n",
+	sprintf(b, "[ZD] HUD OLED %s%s | TOF %s | BUZZER on PA3 (Grove D4): 3 beeps at boot\r\n",
 			oled_ok ? "OK on " : "NOT FOUND", oled_ok ? oled_where() : "",
 			tof_ok() ? "OK" : "NOT FOUND");
 	send(b);
 #if ENH_LASER
 	sprintf(b, "[ZD] LASER (KY-008) on PD2 = PMOD pin 7, glow %d%%, full brightness on every 'Laser fired!'\r\n", laser_glow_pct());
+	send(b);
+#endif
+#if ENH_TELE_OLED
+	sprintf(b, "[ZD] TELEMETRY OLED (SSD1306, I2C1 D15/D14) %s | joystick click = next page\r\n",
+			tele_ok ? "OK" : "NOT FOUND (retrying every 3 s)");
+	send(b);
+#endif
+#if ENH_TURRET
+	sprintf(b, "[ZD] TURRET %s: pan D3 (PB0), tilt D6 (PB1), joystick A0/A1 + SW D2\r\n", turret_ok ? "OK" : "FAILED");
+	send(b);
+	send("[ZD] joystick: STANDBY click = next page, hold = recentre | BATTLE steers the turret, hold = open/close the GUI\r\n");
+	send("[ZD] BATTLE: triple press = MANUAL AIM (joystick click fires) | GUI open: no auto-fire, joystick = forward/back + pan\r\n");
+	if (turret_joy_fault()) {
+#if ENH_TELE_OLED
+		UI_Status("JOYSTICK WIRING?");
+#endif
+	}
+#endif
+#if ENH_TOF
+	sprintf(b, "[ZD] ToF grab = hand within %d mm for %d readings (~%d ms). E,TOF shows it live\r\n",
+			TOF_NEAR_MM, TOF_HIT_SAMPLES, TOF_HIT_SAMPLES * 33);
 	send(b);
 #endif
 	if (!oled_ok) {
@@ -77,7 +119,7 @@ void enh_init(void)
 	}
 	sprintf(b, "[ZD] temperature offset %+.2f degC (T_OFFSET in app_config.h)\r\n", sensors_temp_offset());
 	send(b);
-	send("[ZD] Tera Term commands: E,TEST  E,GCAL  E,MCAL  E,TCAL[,degC]  E,CAL (in STANDBY)  E,TOF  E,LASER[,glow%]\r\n");
+	send("[ZD] Tera Term commands: E,TEST  E,GCAL  E,MCAL  E,TCAL[,degC]  E,CAL (in STANDBY)  E,TOF  E,JOY  E,JOYCAL  E,LASER[,glow%]\r\n");
 }
 
 /* E,TEST: print what every add-on sees right now */
@@ -107,14 +149,26 @@ static void run_command(uint32_t now)
 	if (c == GL_CMD_TOF_DEBUG) {
 		char b[120];
 		tof_dbg_until = now + TOF_DEBUG_MS;
-		sprintf(b, "[ZD] ToF readings for %d s. Grab = closer than %d mm held %d ms (after > %d mm)\r\n",
-				TOF_DEBUG_MS / 1000, TOF_NEAR_MM, TOF_HOLD_MS, TOF_FAR_MM);
+		sprintf(b, "[ZD] ToF readings for %d s. Grab = %d NEAR readings (< %d mm, signal >= %.1f) once ARMED\r\n",
+				TOF_DEBUG_MS / 1000, TOF_HIT_SAMPLES, TOF_NEAR_MM, (double)TOF_MIN_SIGNAL);
+		send(b);
+		return;
+	}
+	if (c == GL_CMD_JOY_DEBUG) {
+		char b[120];
+		joy_dbg_until = now + TOF_DEBUG_MS;
+		sprintf(b, "[ZD] joystick readings for %d s: move the stick, press its button. Centred = ~2000 raw\r\n",
+				TOF_DEBUG_MS / 1000);
 		send(b);
 		return;
 	}
 	if (c == GL_CMD_LASER) {
 #if ENH_LASER
 		char b[80];
+		if (!cur_battle || cur_attacked) {            /* no laser in STANDBY (or while attacked) */
+			send("[ZD] E,LASER only works in BATTLE MODE (double press first)\r\n");
+			return;
+		}
 		sprintf(b, "[ZD] LASER on for %d ms (PD2 / PMOD pin 7)\r\n", LASER_TEST_MS);
 		send(b);
 		laser_test(LASER_TEST_MS);
@@ -136,6 +190,7 @@ static void run_command(uint32_t now)
 	buzzer_beep(80);
 	if (c == GL_CMD_GCAL) sensors_calibrate_gyro(GYRO_CAL_MS);
 	if (c == GL_CMD_MCAL) sensors_calibrate_magneto(MAG_CAL_MS);
+	if (c == GL_CMD_JOY_CAL) turret_calibrate_dirs();
 	if (c == GL_CMD_TCAL) sensors_calibrate_temp(arg, arg < -999.0f);
 	BSP_LED_On(LED2);                                  /* calibrations use the LED: STANDBY = LED on */
 	buzzer_pattern((const uint16_t[]){ 60, 60, 60 }, 3);
@@ -157,6 +212,43 @@ static void game_events(uint32_t now)
 	run_command(now);
 }
 
+/* ---------------- REAL-LIFE mode (game tab "PLAY IN REAL LIFE") ---------------- */
+static int rl_state(void)
+{
+	if (!rl) return RL_ST_OFF;
+	if (rl_safe) return RL_ST_SAFE;
+	if (!rl_fresh) return RL_ST_NO_AIM;
+	if (rl_flags & RL_F_LOCK) return RL_ST_LOCK;
+	if (rl_flags & RL_F_TARGET) return RL_ST_TRACK;
+	return RL_ST_SEARCH;
+}
+
+static void set_rl(int on, const char *why)
+{
+#if ENH_GAME_LINK && ENH_REAL_LIFE
+	char b[140];
+	if (on == rl) { if (on) game_link_set_rl(1); return; }   /* E,RL,1 again: confirm (R,ON) */
+	rl = (uint8_t)on;
+	aim_manual = 0;                                   /* real-life mode replaces MANUAL AIM */
+	fire_flag_req = 0;
+	rl_fresh = rl_flags = rl_safe = 0;
+	game_link_set_rl(on);
+	sprintf(b, "[ZD] REAL-LIFE MODE %s%s\r\n", on ? "ON: webcam + YOLO aim the turret in BATTLE, the game fires on lock"
+	                                             : "OFF: joystick steers the turret again", why);
+	send(b);
+	laser_inhibit(0);
+	laser_dot(0);
+	if (!on) turret_recentre();
+#if ENH_TELE_OLED
+	UI_Status(on ? "REAL LIFE ON" : "REAL LIFE OFF");
+#endif
+	buzzer_pattern((const uint16_t[]){ 30, 40, 30, 40, on ? 90 : 30 }, 5);
+	t_hud = 0;
+#else
+	(void)on; (void)why;
+#endif
+}
+
 static void draw_hud(uint32_t now)
 {
 	HudState s;
@@ -172,54 +264,197 @@ static void draw_hud(uint32_t now)
 	s.zone_clear = now < zone_clear_until;
 	s.score = game_link_score(); s.habitats = game_link_habitats();
 	s.temp = T; s.press = P; s.hum = H;              /* updated every 1 s by sensors.c in STANDBY */
+	s.pos_valid = game_link_connected(now) && game_link_pos(now, &s.pos_x, &s.pos_z, &s.speed, &s.game_alt);
+	s.fired_until = fired_until;
+	s.manual_aim = aim_manual;
+	s.gui = gui;
+	s.rl_state = rl_state();
 	hud_draw(&s);
+}
+
+/* ---------------- GUI on / off (joystick hold in BATTLE) ---------------- */
+static void set_gui(int on, const char *why)
+{
+	char b[120];
+	if (on == gui) return;
+	if (on && rl) set_rl(0, " (GUI opened)");
+	gui = (uint8_t)on;
+	aim_manual = 0;                                   /* the GUI has its own fire controls */
+	fire_flag_req = 0;
+	game_link_set_gui(on);
+	sprintf(b, "[ZD] GUI %s%s\r\n", on ? "OPEN: no auto-fire, joystick flies the drone (forward/back + pan)"
+	                                    : "CLOSED: joystick steers the turret, laser auto-fires at >= 5/10", why);
+	send(b);
+	if (on) turret_recentre();                        /* the turret parks while the joystick flies */
+#if ENH_TELE_OLED
+	UI_Status(on ? "GUI OPEN" : "GUI CLOSED");
+#endif
+	buzzer_pattern((const uint16_t[]){ 30, 40, on ? 90 : 30 }, 3);
+	t_hud = 0;
+}
+
+/* ---------------- turret (Yatin): joystick + pan/tilt servos ---------------- */
+static void turret_task(uint32_t now)
+{
+#if ENH_TURRET
+	if (!turret_ok) return;
+	int mode = !cur_battle || cur_attacked ? TURRET_HOLD : gui ? TURRET_STICK_ONLY
+	         : rl && rl_fresh ? TURRET_AIM : TURRET_STEER;
+	if (mode == TURRET_AIM) turret_set_aim(rl_pan, rl_tilt);
+	turret_update(now, mode);
+
+	if (turret_take_hold()) {                         /* stick button held 0.5 s */
+		if (!cur_battle) {
+			turret_recentre();                        /* STANDBY: recentre the turret */
+#if ENH_TELE_OLED
+			UI_Recentre();
+#endif
+		} else if (!cur_attacked) {
+#if ENH_GAME_LINK
+			if (gui) set_gui(0, "");
+			else if (game_link_connected(now)) set_gui(1, "");
+			else {
+				send("[ZD] GUI: the game is not connected (open it and click CONNECT first)\r\n");
+				buzzer_pattern((const uint16_t[]){ 40, 40, 40 }, 3);
+#if ENH_TELE_OLED
+				UI_Status("NO GAME LINK");
+#endif
+			}
+#endif
+		}
+	}
+	if (turret_take_click()) {
+		if (!cur_battle) {
+#if ENH_TELE_OLED
+			UI_NextPage();                            /* STANDBY: next telemetry page */
+#endif
+		} else if ((aim_manual || gui || rl) && !cur_attacked) {
+			fire_flag_req = 1;                        /* MANUAL AIM, GUI or REAL LIFE: stick click fires */
+		}
+	}
+#if TURRET_AIM_LOG_MS > 0
+	if (cur_battle && !cur_attacked && !gui && turret_steering(now) && now - t_aimlog >= TURRET_AIM_LOG_MS) {
+		char b[100];
+		t_aimlog = now;
+		sprintf(b, "Aim  X: %4d%%  Y: %4d%%  Dir: %-10s Pan: %+5.1f deg  Tilt: %+5.1f deg\r\n",
+				turret_joy_x(), turret_joy_y(), turret_direction(), turret_pan_deg(), turret_tilt_deg());
+		send(b);
+	}
+#endif
+#endif
+	(void)now;
+}
+
+/* ---------------- telemetry OLED (Yatin): snapshot + redraw ---------------- */
+static void tele_task(uint32_t now)
+{
+#if ENH_TELE_OLED
+	ui.mode = !cur_battle ? UI_STANDBY : (aim_manual || rl) ? UI_AIM : UI_BATTLE;
+	ui.rl_state       = (uint8_t)rl_state();
+	ui.sensor[S_T] = T; ui.sensor[S_P] = P; ui.sensor[S_H] = H;
+	ui.sensor[S_A] = A; ui.sensor[S_G] = G; ui.sensor[S_M] = M;
+	ui.sensors_valid  = P > 1.0f;                     /* after the first 1 s telemetry read */
+	ui.energy         = cur_energy;
+	ui.attacked       = (uint8_t)cur_attacked;
+	ui.rescue_ms_left = cur_attacked && now - attack_t0 < RESCUE_MS ? RESCUE_MS - (now - attack_t0) : 0;
+	ui.led_on         = HAL_GPIO_ReadPin(LED2_GPIO_PORT, LED2_PIN) == GPIO_PIN_SET;
+	ui.armed          = aim_manual && !rl ? (cur_energy >= 5) : 1;
+	ui.pan_deg        = turret_pan_deg();
+	ui.tilt_deg       = turret_tilt_deg();
+	ui.joy_x          = turret_joy_x();
+	ui.joy_y          = turret_joy_y();
+	UI_Task(&ui);                                     /* redraws when needed, sends a few rows (DMA) */
+#endif
+	(void)now;
 }
 
 void enh_update(uint32_t now, int battle, int attacked, int energy)
 {
 	cur_battle = battle; cur_attacked = attacked; cur_energy = energy;
+#if ENH_GAME_LINK
+	if (gui && !game_link_connected(now)) set_gui(0, " (PC link lost)");
+	if (rl && !game_link_connected(now)) set_rl(0, " (PC link lost)");
+#endif
+	button_enable_triple(ENH_TRIPLE_AIM && ENH_TURRET && turret_ok && battle && !attacked && !gui && !rl);
 
 #if ENH_GAME_LINK
 	game_link_poll(now, battle, attacked, energy);
 	game_events(now);
+#if ENH_REAL_LIFE
+	{
+		int r = game_link_take_rl(), fl = 0;
+		if (r >= 0) {
+			if (r && gui) set_gui(0, " (real-life mode)");
+			set_rl(r, "");
+		}
+		rl_fresh = (uint8_t)(rl && game_link_aim(now, &rl_pan, &rl_tilt, &fl));
+		rl_flags = rl_fresh ? (uint8_t)fl : 0;
+		if (rl_fresh) rl_safe = (uint8_t)((fl & RL_F_SAFE) != 0);   /* SAFE holds until the PC says clear */
+		if (!rl) rl_safe = 0;
+	}
+#endif
 #endif
 	buzzer_update(now);
-	laser_glow(!attacked && (battle || LASER_GLOW_STANDBY));   /* aiming glow, dark while attacked */
+	laser_inhibit(rl && rl_safe);                     /* REAL LIFE: a person near the line of fire = dark */
+	laser_dot(rl && rl_fresh && battle && !attacked && (rl_flags & RL_F_DOT));   /* calibration dot */
+	laser_glow(!attacked && (battle || LASER_GLOW_STANDBY)    /* aiming glow, dark while attacked */
+	           && !(rl && rl_fresh && (rl_flags & RL_F_DARK)));
 	laser_update(now);
 
 	/* ToF: may only start an attack in BATTLE_MODE, not attacked, after the grace
 	   period, and not while a finger is on the blue button (that's not a zombie) */
-	if (BSP_PB_GetState(BUTTON_USER)) t_button = now;
+	if (button_is_down()) t_button = now;           /* active low: pressed = PC13 LOW */
 	tof_update(now, battle && !attacked && (now - t_battle > TOF_GRACE_MS)
 	                && (now - t_button > TOF_BUTTON_HOLDOFF_MS));
+	/* a cable or the shield resting on the ToF keeps it disarmed: say so once per BATTLE */
+	if (battle && !attacked && !tof_warned && now - t_battle > 3000 && tof_blocked()) {
+		char b[120];
+		tof_warned = 1;
+		sprintf(b, "[ZD] ToF: something is within %d mm of the sensor - hand grab off until it is clear (E,TOF)\r\n",
+				TOF_NEAR_MM);
+		send(b);
+	}
+	if (joy_dbg_until) {
+		if ((int32_t)(now - joy_dbg_until) >= 0) { joy_dbg_until = 0; send("[ZD] joystick readings off\r\n"); }
+		else if (now - t_joydbg >= 100) {
+			char b[200];
+			t_joydbg = now;
+			turret_debug(b, sizeof b);
+			send(b);
+		}
+	}
 	if (tof_dbg_until) {
 		if ((int32_t)(now - tof_dbg_until) >= 0) { tof_dbg_until = 0; send("[ZD] ToF readings off\r\n"); }
 		else if (now - t_tofdbg >= 100) {
-			char b[120];
+			char b[200];
 			t_tofdbg = now;
 			tof_debug(b, sizeof b);
 			send(b);
 		}
 	}
 
-	if (battle && now - t_tilt >= TILT_PERIOD_MS) {
+	if (now - t_tilt >= TILT_PERIOD_MS) {             /* tilt in every mode: the HUD shows the attitude */
 		t_tilt += TILT_PERIOD_MS;
 		if (now - t_tilt > 100) t_tilt = now;         /* fell behind: resync, don't burst */
-		tilt_update();                                /* always: the HUD shows PIT / ROL */
+		tilt_update();
 #if ENH_GAME_LINK
-		if (game_link_connected(now)) {
-			game_link_send_tilt(tilt_pitch(), tilt_roll(), fire_flag, tof_range_mm(), energy);
+		if (battle && game_link_connected(now)) {     /* the stream to the game: BATTLE only */
+			game_link_send_tilt(tilt_pitch(), tilt_roll(), fire_flag, tof_range_mm(), energy,
+			                    gui && !attacked ? turret_joy_x() : 0, gui && !attacked ? turret_joy_y() : 0);
 			fire_flag = 0;
 		}
 #endif
 	}
-	if (battle && now - t_nav >= NAV_PERIOD_MS) {
+	if (now - t_nav >= NAV_PERIOD_MS) {               /* heading + baro altitude for the HUD in every mode */
 		t_nav = now;
 		nav_update();
 #if ENH_GAME_LINK
-		if (game_link_connected(now)) game_link_send_nav(nav_altitude(), nav_heading());
+		if (battle && game_link_connected(now)) game_link_send_nav(nav_altitude(), nav_heading());
 #endif
 	}
+
+	turret_task(now);
+	tele_task(now);
 
 	if (hit_shown && (int32_t)(now - hit_until) >= 0) { oled_set_inverted(0); hit_shown = 0; }
 	if (oled_ok) {
@@ -234,10 +469,15 @@ void enh_on_mode(int battle)
 	uint32_t now = HAL_GetTick();
 	cur_battle = battle;
 	cur_attacked = 0;
+	aim_manual = 0;                                   /* every mode change starts in AUTO FIRE */
+	laser_dot(0);
+	fire_flag_req = 0;
 	game_link_clear_events();
+	(void)tof_take_grab();                            /* a grab from before the mode change doesn't count */
 	laser_cancel();
 	if (battle) {
 		t_battle = t_tilt = t_nav = now;
+		tof_warned = 0;
 		tilt_reset();
 		nav_reset();
 		buzzer_beep(80);
@@ -249,10 +489,12 @@ void enh_on_mode(int battle)
 	t_hud = 0;                                        /* redraw now */
 }
 
+/* 1 = the player fires by hand (no auto-fire): MANUAL AIM, or the GUI is open */
 int enh_manual_fire(void)
 {
+	if (aim_manual || rl) return 1;                   /* REAL LIFE: the game fires on lock, no auto-fire */
 #if ENH_GAME_LINK && ENH_MANUAL_FIRE
-	return game_link_connected(HAL_GetTick());
+	return gui;
 #else
 	return 0;
 #endif
@@ -260,11 +502,50 @@ int enh_manual_fire(void)
 
 int enh_take_fire_request(void)
 {
+	int f = fire_flag_req;                            /* joystick click (MANUAL AIM or GUI) */
+	fire_flag_req = 0;
 #if ENH_GAME_LINK
-	return game_link_take_fire();
-#else
-	return 0;
+	if (game_link_take_fire() && (gui || rl)) f = 1;  /* Space / click in the game, or a YOLO lock */
 #endif
+	if (f && rl && rl_safe) {                         /* REAL LIFE: never at a person */
+		f = 0;
+		send("[ZD] REAL LIFE: not firing, a person is near the line of fire\r\n");
+		buzzer_pattern((const uint16_t[]){ 40, 40, 40 }, 3);
+	}
+	return f;
+}
+
+/* every button event passes through here first: it is shown on the telemetry OLED,
+ * and a triple press in BATTLE toggles MANUAL AIM (Yatin's sub-mode) */
+int enh_on_button(int ev, int battle, int attacked)
+{
+	if (ev == BTN_NONE) return ev;
+	if (ev == BTN_TRIPLE) {
+		if (battle && !attacked && !gui && turret_ok) {
+			aim_manual = !aim_manual;
+			fire_flag_req = 0;
+			send(aim_manual ? "Entering MANUAL AIM MODE\r\n" : "Leaving MANUAL AIM MODE (auto fire)\r\n");
+#if ENH_TELE_OLED
+			UI_Button(3);                             /* "3x -> AIM MODE" / "3x -> AUTO FIRE" */
+#endif
+			buzzer_pattern((const uint16_t[]){ 30, 30, 30, 30, 30 }, 5);
+			t_hud = 0;
+		}
+		return BTN_NONE;                              /* drone.c never sees a triple press */
+	}
+#if ENH_TELE_OLED
+	UI_Button(ev == BTN_DOUBLE ? 2 : 1);              /* a long press counts as a single press */
+#endif
+	(void)battle; (void)attacked;
+	return ev;
+}
+
+void enh_on_charged(int energy_now)
+{
+#if ENH_TELE_OLED
+	UI_Charged(energy_now);
+#endif
+	(void)energy_now;
 }
 
 void enh_on_fire_not_ready(void)
@@ -284,17 +565,26 @@ int enh_take_charge_request(void)
 	return 0;
 }
 
-void enh_on_laser_fired(void)
+void enh_on_laser_fired(int energy_left)
 {
 	static const uint16_t zap[] = { 20, 30, 60 };
 	fire_flag = 1;
+	fired_until = HAL_GetTick() + 600;                /* HUD: window flash + "LASER FIRED" */
+#if ENH_TELE_OLED
+	UI_Fired(energy_left);
+#endif
+	(void)energy_left;
 	buzzer_pattern(zap, 3);
 	laser_shot();                                     /* the real laser fires too */
 }
 
 int enh_take_tof_grab(void)
 {
-	return tof_take_grab();
+	if (!tof_take_grab()) return 0;
+	char b[100];
+	tof_grab_info(b, sizeof b);
+	send(b);
+	return 1;
 }
 
 void enh_on_attacked(int source, uint32_t now)
@@ -339,6 +629,9 @@ void enh_on_terminated(void)
 	buzzer_off();
 	uart_rx_stop();
 	if (oled_ok) hud_signal_lost();
+#if ENH_TELE_OLED
+	UI_ShowTerminated();                              /* telemetry OLED: SIGNAL LOST too */
+#endif
 	buzzer_blocking_tone(1500);                       /* one long tone, then silence */
 	if (oled_ok) oled_power(0);
 	tof_shutdown();

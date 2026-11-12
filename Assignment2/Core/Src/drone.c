@@ -97,7 +97,7 @@ static void battle_fighting(uint32_t now, int ev)
 		enter_standby();
 		return;
 	}
-	int manual = enh_manual_fire();             /* [ENH] 1 = PC game connected: the player fires */
+	int manual = enh_manual_fire();             /* [ENH] 1 = the player fires (off by default: spec auto-fire) */
 
 	/* single press -> charge 3/10 ([ENH] also a game charging pylon; a long press
 	   counts as a single press unless the game is connected) */
@@ -106,20 +106,21 @@ static void battle_fighting(uint32_t now, int ev)
 		if (energy > 10) energy = 10;
 		sprintf(buf, "Laser charging: %d/10\r\n", energy);
 		send(buf);
+		enh_on_charged(energy);                              /* [ENH] */
 	}
 	if (!manual) {
 		while (energy >= 5) {                    /* auto fire, costs 5/10 (spec) */
 			energy -= 5;
 			sprintf(buf, "Laser fired! Charge left: %d/10\r\n", energy);
 			send(buf);
-			enh_on_laser_fired();                            /* [ENH] */
+			enh_on_laser_fired(energy);                      /* [ENH] */
 		}
 	} else if (ev == BTN_LONG || enh_take_fire_request()) {   /* [ENH] game mode: fire on demand */
 		if (energy >= 5) {
 			energy -= 5;
 			sprintf(buf, "Laser fired! Charge left: %d/10\r\n", energy);
 			send(buf);
-			enh_on_laser_fired();
+			enh_on_laser_fired(energy);
 		} else {
 			sprintf(buf, "Laser not ready: %d/10 (needs 5/10)\r\n", energy);
 			send(buf);
@@ -183,7 +184,8 @@ void drone_start(void)
 
 void drone_update(uint32_t now, int button_ev)
 {
-	enh_update(now, mode == BATTLE_MODE, attacked, energy);  /* [ENH] stream, HUD, buzzer, ToF */
+	enh_update(now, mode == BATTLE_MODE, attacked, energy);  /* [ENH] stream, HUD, buzzer, ToF, turret */
+	button_ev = enh_on_button(button_ev, mode == BATTLE_MODE, attacked);   /* [ENH] OLED press log */
 
 	if (mode == STANDBY_MODE) standby_update(now, button_ev);
 	else                      battle_update(now, button_ev);

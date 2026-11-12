@@ -2,12 +2,19 @@
  * game_link.h - ASCII protocol between the board and the PC game
  *
  * Board -> PC (only while the game is connected, so Tera Term stays clean):
- *   C,<pitch_deg>,<roll_deg>,<fire>,<range_mm>,<energy>   50 Hz in BATTLE_MODE
+ *   C,<pitch_deg>,<roll_deg>,<fire>,<range_mm>,<energy>,<joy_x>,<joy_y>   50 Hz in BATTLE_MODE
+ *        (joy_x / joy_y: joystick -100..100 % while the GUI is active, else 0)
  *   N,<baro_alt_m>,<heading_deg>                          2 Hz in BATTLE_MODE
  *   A,<sec_left>,<FLIP|TOF>                               1 Hz while attacked
- *   Z,STATUS,<STANDBY|BATTLE>,<attacked>,<energy>         reply to E,PING
+ *   Z,STATUS,<STANDBY|BATTLE>,<attacked>,<energy>,<gui>,<rl>   reply to E,PING
+ *   G,ON / G,OFF                                          GUI opened / closed (joystick hold in BATTLE)
+ *   R,ON / R,OFF                                          real-life mode on / off
  * PC -> board:
  *   E,PING  E,HIT  E,CHARGE  E,FIRE  E,WIPE,<sec>  E,SAFE  E,SCORE,<score>,<habitats>
+ *   E,RL,<0|1>                            "PLAY IN REAL LIFE" tab closed / opened
+ *   E,AIM,<pan x10>,<tilt x10>,<flags>    real-life mode, ~25 Hz: turret angles in tenths of a degree
+ *                                         from the centre (+ = right / up), flags RL_F_* (app_config.h)
+ *   E,POS,<x m>,<z m>,<speed m/s>,<alt m>   (optional, drone position for the HUD)
  * Commands typed in Tera Term (STANDBY mode for the calibrations):
  *   E,TEST           print tilt / range / devices, beep, flash the OLED
  *   E,GCAL           gyroscope bias (keep the board still, 2 s)
@@ -15,6 +22,7 @@
  *   E,TCAL[,<degC>]  temperature offset (reference from a thermometer, or the power-up reading)
  *   E,CAL            print every calibration value as one block to paste into app_config.h
  *   E,TOF            print the ToF readings 10x a second for 15 s (any mode), to tune TOF_*
+ *   E,JOY            print the joystick (raw X/Y, centre, %, button) 10x a second for 15 s (any mode)
  *   E,LASER          laser at full brightness for LASER_TEST_MS (any mode), to check the wiring
  *   E,LASER,<pct>    set the idle glow brightness in % (until reset; then edit LASER_IDLE_PCT)
  * The game sends E,PING every 2 s; that is how the board knows it is there.
@@ -31,8 +39,12 @@ void game_link_poll(uint32_t now, int battle, int attacked, int energy);
 int  game_link_connected(uint32_t now);        /* 1 if the game pinged recently */
 
 /* board -> PC */
-void game_link_send_tilt(float pitch, float roll, int fire, uint16_t range_mm, int energy);
+void game_link_send_tilt(float pitch, float roll, int fire, uint16_t range_mm, int energy, int jx, int jy);
+void game_link_set_gui(int on);                /* sends G,ON / G,OFF and remembers it for Z,STATUS */
 void game_link_send_nav(float alt_m, float heading);
+void game_link_set_rl(int on);                 /* sends R,ON / R,OFF and remembers it for Z,STATUS */
+int  game_link_take_rl(void);                  /* -1 = nothing new, else 0 / 1 from E,RL */
+int  game_link_aim(uint32_t now, float *pan, float *tilt, int *flags);   /* 1 = fresh E,AIM (< RL_AIM_TIMEOUT_MS) */
 void game_link_send_attack(int secs_left, int source_tof);
 
 /* PC -> board events (take_* functions return 1 once per event) */
@@ -49,9 +61,12 @@ int  game_link_take_zone_clear(void);          /* just left a horde zone */
 #define GL_CMD_TOF_DEBUG 6                     /* E,TOF: stream ToF readings for TOF_DEBUG_MS */
 #define GL_CMD_LASER     7                     /* E,LASER: laser module test */
 #define GL_CMD_LASER_GLOW 8                    /* E,LASER,<pct>: idle glow level */
+#define GL_CMD_JOY_DEBUG 9                     /* E,JOY: stream joystick readings for TOF_DEBUG_MS */
+#define GL_CMD_JOY_CAL   20                    /* E,JOYCAL: joystick direction calibration (STANDBY) */
 int  game_link_take_command(float *arg);       /* GL_CMD_* once per typed command, 0 = none */
 int  game_link_score(void);                    /* -1 until the game sends a score */
 int  game_link_habitats(void);
 void game_link_clear_events(void);             /* forget pending events (mode change) */
+int  game_link_pos(uint32_t now, float *x, float *z, float *spd, float *alt);   /* 1 = fresh E,POS (< 1.5 s old) */
 
 #endif /* GAME_LINK_H */

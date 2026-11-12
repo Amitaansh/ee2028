@@ -107,6 +107,21 @@ static const Cand cands[] = {
 	{ "Grove A3",   GPIOC, GPIO_PIN_2,  GPIOC, GPIO_PIN_1  },   /* A3 / A4 */
 };
 
+/* pins that belong to another add-on: never probed */
+static int reserved(GPIO_TypeDef *port, uint16_t pin)
+{
+#if ENH_TELE_OLED
+	if (port == GPIOB && (pin == GPIO_PIN_8 || pin == GPIO_PIN_9)) return 1;    /* telemetry OLED, I2C1 */
+#endif
+#if ENH_TURRET
+	if (port == GPIOB && (pin == GPIO_PIN_0 || pin == GPIO_PIN_1)) return 1;    /* servos D3, D6 */
+	if (port == GPIOC && (pin == GPIO_PIN_4 || pin == GPIO_PIN_5)) return 1;    /* joystick A1, A0 */
+	if (port == GPIOD && pin == GPIO_PIN_14) return 1;                          /* joystick SW D2 */
+#endif
+	(void)port; (void)pin;
+	return 0;
+}
+
 static int try_soft(void)
 {
 	char *d = diag + strlen(diag);
@@ -118,6 +133,7 @@ static int try_soft(void)
 		/* never put I2C traffic on the laser pin (if it is ever moved to a Grove port) */
 		if ((c->cp == LASER_PORT && c->c == LASER_PIN) || (c->dp == LASER_PORT && c->d == LASER_PIN)) continue;
 #endif
+		if (reserved(c->cp, c->c) || reserved(c->dp, c->d)) continue;   /* [ENH] telemetry OLED / turret pins */
 		/* note every port that has I2C-style pull-ups on it: that's where a module is plugged */
 		if (ext_pullup(c->cp, c->c) && ext_pullup(c->dp, c->d)) {
 			d += sprintf(d, "%spull-ups on %s", any ? ", " : "", c->name);
@@ -147,10 +163,12 @@ int oled_bus_find(void)
 	diag[0] = 0; where[0] = 0; addr7 = 0; use_soft = 0;
 
 	__HAL_RCC_GPIOB_CLK_ENABLE();
+#if !ENH_TELE_OLED      /* [ENH] with two OLEDs, I2C1 (D15/D14) is the telemetry OLED's */
 	__HAL_RCC_I2C1_CLK_ENABLE();
 	__HAL_RCC_I2C1_FORCE_RESET();
 	__HAL_RCC_I2C1_RELEASE_RESET();
 	if (try_hw("I2C1 D15/D14", I2C1, GPIOB, GPIO_PIN_8, GPIO_PIN_9, GPIO_AF4_I2C1)) return 1;
+#endif
 
 	__HAL_RCC_GPIOC_CLK_ENABLE();
 	__HAL_RCC_I2C3_CLK_ENABLE();

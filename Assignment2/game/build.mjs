@@ -9,5 +9,6 @@ await build({
   target: ['chrome110'],
   outfile: 'dist/game.js',
   legalComments: 'eof',
+  loader: { '.bin': 'binary', '.jpg': 'dataurl' },        // baked CC0 character data (tools/bake-characters.mjs) embedded in the bundle
 });
 console.log('built dist/game.js');

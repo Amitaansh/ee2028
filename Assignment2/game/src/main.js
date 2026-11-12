@@ -6,6 +6,7 @@ import { World, HALF, roadLine } from './world.js';
 import { Drone, ChaseCam } from './drone.js';
 import { parseLine, SerialLink, BoardSim } from './protocol.js';
 import { Sfx } from './audio.js';
+import { RealLife, makeTabs } from './reallife.js';
 
 const $ = (id) => document.getElementById(id);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -48,8 +49,34 @@ const G = {
   lastTilt: 0, cCount: 0, cRate: 0, lastLine: 0, fwSeen: false, tConnect: 0, fwWarned: false,
   T: null, P: null, H: null,
   lastScoreMsg: '', tScore: 0, tPing: 0, tRate: 0,
+  gui: false, joy: { x: 0, y: 0 },         // USB: GUI opened by holding the joystick button on the board (G,ON)
 };
-window.__zd = { G, world, drone, settings, gfx };    // handy in the DevTools console
+// USB play only runs while the board says the GUI is active; the keyboard simulation always runs
+const guiLive = () => G.linkKind !== 'usb' || G.gui;
+
+// ------------------------------------------------------------ "PLAY IN REAL LIFE" tab (reallife.js)
+// Webcam + YOLO aim the real turret; opened from the waiting screen after the USB connect.
+const rl = new RealLife({
+  send: (line) => { if (G.link && G.linkKind === 'usb' && !G.terminated) G.link.send(line); },
+  connected: () => G.linkKind === 'usb' && G.linkOk && !G.terminated,
+  onBack: () => closeRealLife(),
+  onKill: () => { G.kills++; G.score += 25; },
+});
+const rlTabs = makeTabs(() => openRealLife());
+rlTabs.querySelector('[data-tab="fly"]').onclick = () => closeRealLife();
+document.querySelector('#title h2').after(rlTabs);
+function openRealLife() {
+  if (rl.isOpen) return;
+  sfx.unlock();
+  log('PLAY IN REAL LIFE: webcam + YOLO aim the turret', 'l-ok');
+  rl.open();
+}
+function closeRealLife() {
+  if (!rl.isOpen) return;
+  rl.close();
+  log('Back to the drone (real-life mode off)', 'l-diag');
+}
+window.__zd = { G, world, drone, settings, gfx, chase, camera, rl };    // handy in the DevTools console
 
 // ------------------------------------------------------------ command centre log
 const logEl = $('loglines');
@@ -80,11 +107,13 @@ function send(line) {
 // ------------------------------------------------------------ board lines
 function onLine(line) {
   G.lastLine = performance.now();
+  rl.onLine(line);
   const ev = parseLine(line);
   switch (ev.type) {
     case 'tilt':
       G.fwSeen = true;
       G.raw.pitch = ev.pitch; G.raw.roll = ev.roll; G.range = ev.range;
+      G.joy.x = ev.jx || 0; G.joy.y = ev.jy || 0;
       if (ev.energy !== undefined) G.energy = ev.energy;
       G.lastTilt = performance.now(); G.cCount++;
       if (G.boardMode !== 'BATTLE' && !G.terminated) setMode('BATTLE', true);
@@ -98,6 +127,7 @@ function onLine(line) {
     case 'status':
       G.fwSeen = true;
       if (ev.mode !== G.boardMode) setMode(ev.mode, true);
+      if (ev.gui !== undefined && ev.gui !== G.gui) setGui(ev.gui);
       G.energy = ev.energy;
       if (ev.attacked && !G.attacked) startAttack(G.attackSrc);
       break;
@@ -106,12 +136,17 @@ function onLine(line) {
       if (G.terminated) recoverFromLost();
       setMode(ev.mode);
       break;
+    case 'gui': setGui(ev.on); break;
     case 'charging': G.energy = ev.energy; log(ev.text); break;
     case 'notready':
       G.energy = ev.energy; log(ev.text, 'l-warn');
-      toast('LASER NOT READY', `${ev.energy}/10 · charge to 5/10 first (blue button or a cyan pylon)`, 'amb', 1800);
+      if (!rl.isOpen) toast('LASER NOT READY', `${ev.energy}/10 · charge to 5/10 first (blue button or a cyan pylon)`, 'amb', 1800);
       break;
-    case 'fired': G.energy = ev.energy; log(ev.text, 'l-ok'); fireLaser(); break;
+    case 'fired':
+      G.energy = ev.energy; log(ev.text, 'l-ok');
+      if (rl.isOpen) { sfx.laser(); setTimeout(() => sfx.zap(), 120); }   // real turret fired: no in-game volley
+      else fireLaser();
+      break;
     case 'attacked':
       log(ev.text, 'l-red');
       if (!G.attacked) startAttack(G.attackSrc);
@@ -142,8 +177,10 @@ function setMode(m, silent = false) {
   if (m === 'BATTLE') {
     G.attacked = false;
     $('standby').classList.add('hidden');
-    if (!G.running && !G.over) { G.running = true; G.missionT = 0; toast('BATTLE MODE', 'drone launching · tilt the board to fly', 'grn'); }
-    drone.takeoff();
+    if (guiLive()) {
+      if (!G.running && !G.over) { G.running = true; G.missionT = 0; toast('BATTLE MODE', 'drone launching · tilt the board to fly', 'grn'); }
+      drone.takeoff();
+    }
     if (!silent) sfx.mode();
   } else if (m === 'STANDBY') {
     G.attacked = false;
@@ -152,6 +189,42 @@ function setMode(m, silent = false) {
     $('standby').classList.remove('hidden');
     if (G.wipeActive) { G.wipeActive = false; $('wipe').classList.add('hidden'); }
     if (!silent) sfx.mode();
+  }
+}
+
+// GUI opened / closed on the board (joystick held 0.5 s in BATTLE_MODE)
+function setGui(on) {
+  if (G.linkKind !== 'usb') return;
+  if (on) closeRealLife();                     // the board opened the GUI: fly
+  G.gui = on;
+  showGuiWait(!on);
+  if (on) {
+    log('GUI ACTIVE: joystick = forward / back + pan, tilt = climb / bank, no auto-fire', 'l-ok');
+    if (G.boardMode === 'BATTLE' && !G.terminated) {
+      if (!G.running && !G.over) { G.running = true; G.missionT = 0; }
+      drone.takeoff();
+      toast('GUI ACTIVE · BATTLE MODE', 'joystick: push = forward, pull = back, left / right = pan · tilt = climb / bank', 'grn', 4500);
+    } else {
+      toast('GUI ACTIVE', 'double-press the blue button for BATTLE MODE', 'grn', 3500);
+    }
+    sfx.mode();
+  } else {
+    log('GUI closed on the board: joystick back on the turret, laser auto-fires', 'l-diag');
+    if (drone.state !== 'parked' && drone.state !== 'down') drone.state = drone.pos.y < 3 ? 'parked' : 'hover';
+    G.joy.x = G.joy.y = 0;
+  }
+}
+
+// USB connected but the GUI is not open: the title screen stays up as a waiting screen
+function showGuiWait(on) {
+  const t = $('title');
+  t.classList.toggle('hidden', !on);
+  t.classList.toggle('waiting', on);
+  $('hud').classList.toggle('hidden', on);     // the flight HUD only shows while the GUI is open
+  if (on) {
+    $('serialNote').innerHTML = '<b style="color:#5dff8a">DRONE CONNECTED</b> · GUI inactive (the board runs on its own: joystick = turret, laser auto-fires).<br>'
+      + 'To open the GUI: double-press the blue button for <b>BATTLE MODE</b>, then <b>hold the joystick button</b> for 0.5 s.<br>'
+      + 'Or pick <b style="color:#ff6a5a">PLAY IN REAL LIFE</b> above: the webcam and YOLO aim the real laser turret.';
   }
 }
 
@@ -200,7 +273,7 @@ function resetMission() {
   for (const p of world.pylons) p.cooldown = 0;
   drone.reset();
   ['attack', 'end', 'wipe'].forEach((id) => $(id).classList.add('hidden'));
-  if (G.boardMode === 'BATTLE') { G.running = true; drone.takeoff(); }
+  if (G.boardMode === 'BATTLE' && guiLive()) { G.running = true; drone.takeoff(); }
 }
 
 function finish(title, color) {
@@ -292,7 +365,7 @@ window.addEventListener('keyup', (e) => {
 
 // USB mode: fire from the PC (the board decides if there is enough energy)
 function requestFire() {
-  if (G.linkKind !== 'usb' || G.boardMode !== 'BATTLE' || G.attacked || G.terminated) return;
+  if (G.linkKind !== 'usb' || !G.gui || G.boardMode !== 'BATTLE' || G.attacked || G.terminated) return;
   send('E,FIRE');
 }
 $('c').addEventListener('mousedown', (e) => { if (e.button === 0) requestFire(); });
@@ -338,7 +411,12 @@ function controlInput() {
   if (settings.invertRoll) r = -r;
   const dz = (v) => Math.sign(v) * Math.max(0, Math.abs(v) - settings.deadzone);
   const k = settings.sens / settings.maxTilt;
-  return { pitch: clamp(dz(p) * k, -1, 1), roll: clamp(dz(r) * k, -1, 1), dp: p, dr: r };
+  const out = { pitch: clamp(dz(p) * k, -1, 1), roll: clamp(dz(r) * k, -1, 1), dp: p, dr: r };
+  if (G.linkKind === 'usb' && G.gui) {           // board joystick: forward / back + pan (the board already removes its dead zone)
+    out.jx = clamp(G.joy.x / 100, -1, 1);
+    out.jy = clamp(G.joy.y / 100, -1, 1);
+  }
+  return out;
 }
 
 function simKeys() {
@@ -394,6 +472,7 @@ async function connectUsb(anyPort) {
     await link.connect(115200, anyPort);
     G.link = link;
     startHud('usb');
+    showGuiWait(!G.gui);                    // waiting screen until the board opens the GUI (G,ON)
     G.tConnect = performance.now();
     send('E,PING');
     setTimeout(() => {
@@ -404,6 +483,15 @@ async function connectUsb(anyPort) {
   }
 }
 $('connectBtn').onclick = () => connectUsb(false);
+// test hook (headless tests, DevTools): attach any object with send(line) as if it were the USB link
+window.__zd.onLine = onLine;
+window.__zd.attachLink = (link) => {
+  G.link = link; G.linkOk = true;
+  startHud('usb');
+  showGuiWait(!G.gui);
+  G.tConnect = performance.now();
+  send('E,PING');
+};
 document.addEventListener('click', (e) => { if (e.target && e.target.id === 'anyPort') { e.preventDefault(); connectUsb(true); } });
 $('simBtn').onclick = () => {
   sfx.unlock();
@@ -475,13 +563,13 @@ function drawHud(dt, ci) {
 
   // ToF: the board already sends a median-filtered range (tof.c), so this doesn't flicker.
   // TOF_NEAR / TOF_FAR mirror TOF_NEAR_MM / TOF_FAR_MM in app_config.h; the grab itself is
-  // decided on the board (near for TOF_HOLD_MS), the game only shows it.
-  const TOF_NEAR = 50, TOF_FAR = 150, TOF_HAND_FROM = 250;
+  // decided on the board (TOF_HIT_SAMPLES readings within TOF_NEAR_MM, ~0.2 s), the game only shows it.
+  const TOF_NEAR = 70, TOF_FAR = 150, TOF_HAND_FROM = 250;
   const r = G.range;
   const close = r < 600 ? 1 - r / 600 : 0;
   $('tofbar').style.width = `${close * 100}%`;
   $('tofbar').style.background = r < TOF_NEAR ? '#ff3b3b' : r < TOF_FAR ? '#ffb340' : '#3ae6ff';
-  $('tof').textContent = r >= 8190 ? 'no target' : `${r} mm${r < TOF_NEAR ? '  HOLD = GRAB' : ''}`;
+  $('tof').textContent = r >= 8190 ? 'no target' : `${r} mm${r < TOF_NEAR ? '  GRAB!' : ''}`;
   const hand = $('hand');
   const hc = r < TOF_HAND_FROM ? 1 - r / TOF_HAND_FROM : 0;
   hand.style.opacity = hc > 0 ? Math.min(1, hc * 2) : 0;
@@ -580,7 +668,7 @@ function frame() {
   if (G.linkKind === 'sim' && G.link) { simKeys(); G.link.update(dt); }
 
   const ci = controlInput();
-  const flying = G.boardMode === 'BATTLE' && !G.terminated && !G.over;
+  const flying = G.boardMode === 'BATTLE' && !G.terminated && !G.over && guiLive();
   const hit = drone.update(dt, flying && !G.attacked ? ci : { pitch: 0, roll: 0 }, world);
   if (hit && flying && !G.attacked) onHit(hit);
 
@@ -652,6 +740,8 @@ function frame() {
     if (G.linkKind === 'usb') { l.textContent = G.fwSeen ? 'USB · STM32' : 'USB · NO REPLY'; l.style.color = G.fwSeen ? '#5dff8a' : '#ff4a4a'; }
   }
 
+  if (rl.isOpen) { sfx.rotor(0, 0); return; }   // real-life tab covers the screen: leave the GPU to YOLO
+
   world.update(dt, t, drone, camera);
   if (!$('title').classList.contains('hidden')) titleFlyover(dt, t);
   else if (drone.state === 'parked') {
@@ -675,6 +765,24 @@ function frame() {
     toast('GRAPHICS SET TO LOW', 'the frame rate was low on High · Esc to change', 'amb', 3500);
   }
   gfx.render(dt, t, { flash: world.flash, shake: chase.shake, attack: G.attacked, lost: G.terminated, bloom: settings.bloom });
+  drawPerf(dt);
+}
+
+// ------------------------------------------------------------ P = performance readout, H = hide HUD (screenshots)
+const perfEl = $('perf');
+let perfN = 0, perfT = 0;
+window.addEventListener('keydown', (e) => {
+  if (e.repeat) return;
+  if (e.code === 'KeyP') perfEl.classList.toggle('hidden');
+  if (e.code === 'KeyH') document.body.classList.toggle('nohud');
+});
+function drawPerf(dt) {
+  if (perfEl.classList.contains('hidden')) return;
+  perfN++; perfT += dt;
+  if (perfT < 0.5) return;
+  const i = renderer.info.render;
+  perfEl.textContent = `${Math.round(perfN / perfT)} fps · ${gfx.quality.toUpperCase()}${settings.gfx === 'auto' ? ' (auto)' : ''} · ${renderer.domElement.width}×${renderer.domElement.height} · ${i.calls} draws`;
+  perfN = 0; perfT = 0;
 }
 
 // ------------------------------------------------------------ title screen: cinematic flyover down the avenues

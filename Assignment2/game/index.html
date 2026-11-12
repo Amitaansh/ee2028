@@ -57,6 +57,8 @@
   #title h1 { margin: 0; font-size: 64px; letter-spacing: .12em; font-weight: 900; color: #fff; text-shadow: 0 0 18px #ff2a2a, 0 0 2px #000; }
   #title h1 span { color: #ff3b3b; }
   #title h2 { margin: 6px 0 26px; font-weight: 400; letter-spacing: .35em; color: #8fe; font-size: 15px; }
+  #title.waiting #connectBtn, #title.waiting #simBtn { display: none; }
+  #title.waiting .note { font-size: 15px; max-width: 760px; }
   .btn { pointer-events: auto; cursor: pointer; background: rgba(10,30,44,.9); color: #e8fbff; border: 1px solid var(--cy); padding: 14px 26px; font-size: 16px; font-weight: 700; letter-spacing: .1em; border-radius: 4px; margin: 6px; min-width: 330px; }
   .btn:hover { background: rgba(30,80,100,.95); box-shadow: 0 0 18px rgba(58,230,255,.4); }
   .btn.sec { border-color: #567; color: #bcd; font-weight: 600; font-size: 14px; }
@@ -122,6 +124,8 @@
   #attack .count { text-shadow: 0 0 40px #f00, 0 0 90px rgba(255,0,0,.6); }
   #lost h1, #end h1 { text-shadow: 0 0 30px currentColor; }
   #settings .box { border-radius: 3px; box-shadow: 0 0 40px rgba(58,230,255,.2); }
+  #perf { position: fixed; top: 6px; left: 50%; transform: translateX(-50%); z-index: 50; font-size: 12px; color: #9ff; background: rgba(0,0,0,.6); padding: 2px 10px; border-radius: 2px; pointer-events: none; }
+  body.nohud #hud, body.nohud #hint, body.nohud #scan { display: none !important; }
   #settings select { background: #0a1a26; color: #dff8ff; border: 1px solid var(--cy2); padding: 3px 6px; font: inherit; }
 </style>
 </head>
@@ -130,6 +134,7 @@
 <div id="vignette"></div>
 <div id="hitflash"></div>
 <div id="scan"></div>
+<div id="perf" class="hidden mono"></div>
 
 <div id="hud" class="hidden">
   <div id="tl" class="panel">
@@ -251,11 +256,13 @@
     <span>Fly</span><span>tilt the board (pitch = climb / dive, roll = turn)</span>
     <span>Launch / standby</span><span>double-press the blue USER button</span>
     <span>Charge laser</span><span>tap the blue button (+3/10) or fly through a <b style="color:#3ae6ff">cyan pylon ring</b></span>
-    <span>Fire laser</span><span><b>hold</b> the blue button ≥ 0.5 s (or Space / click) once charged to 5/10</span>
+    <span>Open the GUI</span><span>in BATTLE MODE, <b>hold the joystick button</b> 0.5 s (again = close). Without the GUI the board works on its own: joystick = turret, laser auto-fires at 5/10</span>
+    <span>Fire laser (GUI)</span><span><b>hold</b> the blue button ≥ 0.5 s, <b>click the joystick</b>, or Space / click, once charged to 5/10</span>
+    <span>Joystick (GUI)</span><span>push = forward · pull = backward · left / right = pan · centre = hover</span>
     <span>Mission</span><span>find the 5 <b style="color:#9fd0ff">blue habitat beacons</b>, stay above 35 m over <b style="color:#ff5a5a">red horde zones</b></span>
     <span>Attacked</span><span>board upside down or a hand grabs it (ToF) → double-press within 10 s</span>
     <span>Keyboard sim</span><span><b>WASD/arrows</b> tilt · <b>Space</b> tap = charge, hold = fire, double = launch · <b>F</b> flip · <b>G</b> hand grab</span>
-    <span>Anytime</span><span><b>C</b> level · <b>L</b> log · <b>M</b> mute · <b>Esc</b> settings · <b>R</b> restart</span>
+    <span>Anytime</span><span><b>C</b> level · <b>L</b> log · <b>M</b> mute · <b>Esc</b> settings · <b>R</b> restart · <b>P</b> fps · <b>H</b> hide HUD</span>
   </div>
 </div>
 

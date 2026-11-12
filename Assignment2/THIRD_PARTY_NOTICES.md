@@ -109,3 +109,23 @@ POSSIBILITY OF SUCH DAMAGE.
 
 ## game/dist/game.js: bundles three.js r170 (MIT, Copyright 2010-2024 Three.js Authors)
 https://github.com/mrdoob/three.js
+
+## game/assets: 3D models and textures (all CC0 1.0, public domain; credit not required)
+CC0 1.0 Universal: https://creativecommons.org/publicdomain/zero/1.0/
+Baked into compact binaries by `game/tools/bake-characters.mjs` and `game/tools/bake-props.mjs`; the source files are in `game/assets_src/`.
+
+- Characters by Quaternius, Ultimate Animated Character Pack: Zombie_Male, Zombie_Female, Worker_Male, Soldier_Male (glTF, with animations).
+  https://quaternius.com/packs/ultimatedanimatedcharacter.html
+- Vehicles and street props by Quaternius, Cars Pack (NormalCar1, NormalCar2, SUV, SportsCar, Cop) and Public Transport Pack (Ambulance, Bus, SchoolBus, TrafficLight, TrafficCone) (OBJ + MTL).
+  https://quaternius.com/packs/cars.html
+  https://quaternius.com/packs/publictransport.html
+- Textures from Poly Haven (resized to 512 / 1024 px and repacked):
+  red_brick_03 (Rob Tuytel), concrete_wall_003 (Dimitrios Savva, Rico Cilliers), grey_plaster (Rob Tuytel),
+  rusted_shutter (Dimitrios Savva), asphalt_02 (Rob Tuytel).
+  https://polyhaven.com/license
+
+## Real-life mode (PLAY IN REAL LIFE tab, Fri 13 Nov)
+
+- **onnxruntime-web 1.22.0** (Microsoft, MIT licence): `game/vendor/ort/ort.webgpu.min.js`, `ort-wasm-simd-threaded.jsep.mjs`, `ort-wasm-simd-threaded.jsep.wasm`. Runs the detector in the browser (WebGPU, WebAssembly fallback). Copied unchanged from our L.I.G.H.T project.
+- **YOLOv8n** (Ultralytics, AGPL-3.0, COCO-trained), exported to ONNX with dynamic input size: `game/models/yolov8n-dynamic.onnx`, provenance and hashes in `game/models/yolov8n-export.json`. Copied unchanged from our L.I.G.H.T project.
+- The pre-processing, box decoding, non-maximum suppression and tracker matching in `game/src/reallife.js` follow our own L.I.G.H.T live-vision code (`inference.ts`, `tracker.ts`).

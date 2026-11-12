@@ -3,7 +3,7 @@
 ../Core/Src/drone.c:52:13:start_attack	1
 ../Core/Src/drone.c:63:13:standby_update	4
 ../Core/Src/drone.c:92:13:battle_fighting	15
-../Core/Src/drone.c:144:13:battle_attacked	4
-../Core/Src/drone.c:166:13:battle_update	4
-../Core/Src/drone.c:179:6:drone_start	1
-../Core/Src/drone.c:184:6:drone_update	2
+../Core/Src/drone.c:145:13:battle_attacked	4
+../Core/Src/drone.c:167:13:battle_update	4
+../Core/Src/drone.c:180:6:drone_start	1
+../Core/Src/drone.c:185:6:drone_update	2

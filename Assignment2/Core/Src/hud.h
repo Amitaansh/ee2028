@@ -1,5 +1,7 @@
 /******************************************************************************
- * hud.h - what the OLED shows (the drone's head-up display)
+ * hud.h - what the HUD OLED shows: a primary flight display (attitude
+ * indicator, heading tape, altitude tape, laser energy). Telemetry pages are
+ * on the second OLED (tele_oled.c).
  * hud.c only draws; enhancements.c fills in a HudState snapshot every 100 ms.
  ******************************************************************************/
 #ifndef HUD_H
@@ -20,6 +22,12 @@ typedef struct {
 	int      zone_clear;               /* 1 = show "ZONE CLEAR" */
 	int      score, habitats;          /* score < 0 = no game score yet */
 	float    temp, press, hum;         /* STANDBY telemetry from sensors.c */
+	int      pos_valid;                /* 1 = the game sent E,POS recently */
+	float    pos_x, pos_z, speed, game_alt;
+	uint32_t fired_until;              /* laser flash on the attitude window until then */
+	int      manual_aim;               /* turret MANUAL AIM (triple press in BATTLE) */
+	int      gui;                      /* 1 = GUI (PC game) active: joystick flies the drone */
+	int      rl_state;                 /* [ENH] real-life mode: RL_ST_* (app_config.h), 0 = off */
 } HudState;
 
 void hud_draw(const HudState *s);      /* draw the right screen into the OLED frame buffer */

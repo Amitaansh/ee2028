@@ -21,5 +21,9 @@ void laser_set_glow_pct(int pct);       /* E,LASER,<pct>: change the glow level 
 int  laser_glow_pct(void);
 void laser_kill(void);                  /* everything off, timer stopped (termination) */
 int  laser_is_on(void);                 /* 1 while at full brightness */
+void laser_inhibit(int on);             /* [ENH] real-life mode: a person near the line of fire = fully dark,
+                                           no glow, no shots, until released */
+void laser_dot(int on);                 /* [ENH] real-life calibration: full brightness while on (LASER_MAX_ON_MS
+                                           cut-off; after a cut-off it stays off until laser_dot(0)) */
 
 #endif /* LASER_H */

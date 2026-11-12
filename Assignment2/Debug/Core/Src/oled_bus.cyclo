@@ -1,9 +1,10 @@
 ../Core/Src/oled_bus.c:20:17:i2c_timing	13
 ../Core/Src/oled_bus.c:40:12:ext_pullup	1
 ../Core/Src/oled_bus.c:51:12:try_hw	7
-../Core/Src/oled_bus.c:110:12:try_soft	15
-../Core/Src/oled_bus.c:145:5:oled_bus_find	3
-../Core/Src/oled_bus.c:164:5:oled_bus_write	3
-../Core/Src/oled_bus.c:171:13:oled_bus_address	1
-../Core/Src/oled_bus.c:172:13:oled_bus_where	1
-../Core/Src/oled_bus.c:173:13:oled_bus_diag	1
+../Core/Src/oled_bus.c:111:12:reserved	12
+../Core/Src/oled_bus.c:125:12:try_soft	17
+../Core/Src/oled_bus.c:161:5:oled_bus_find	2
+../Core/Src/oled_bus.c:182:5:oled_bus_write	3
+../Core/Src/oled_bus.c:189:13:oled_bus_address	1
+../Core/Src/oled_bus.c:190:13:oled_bus_where	1
+../Core/Src/oled_bus.c:191:13:oled_bus_diag	1

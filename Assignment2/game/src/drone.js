@@ -230,13 +230,20 @@ export class Drone {
         targetSpeed = 0; targetVy = 0; break;
       case 'takeoff':
         targetSpeed = 6; targetVy = 9;
-        yawRate = -input.roll * 0.6;
+        yawRate = -input.roll * 0.6 - (input.jx || 0) * 0.8;
         if (this.pos.y > 22) this.state = 'flying';
         break;
       case 'flying': {
         yawRate = -input.roll * 1.3;
         targetVy = -input.pitch * 17;
-        targetSpeed = clamp(22 + input.pitch * 11, 12, 34);
+        if (input.jy !== undefined) {
+          // board joystick (GUI active): push = forward, pull = backward, centre = hover in place;
+          // left / right = pan (yaw on the spot). Tilt still climbs / dives and banks.
+          yawRate -= input.jx * 1.4;
+          targetSpeed = input.jy >= 0 ? input.jy * 34 : input.jy * 14;
+        } else {
+          targetSpeed = clamp(22 + input.pitch * 11, 12, 34);
+        }
         break;
       }
       case 'hover':

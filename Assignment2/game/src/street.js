@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { N, CELL, BLOCK, HALF, rngFrom, cellCenter, roadLine, beamMaterial } from './world.js';
 import { fx } from './fx.js';
+import { loadProps, propMaterial } from './props.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 
@@ -215,7 +216,7 @@ export class Street {
       const hx = it.x + Math.cos(-it.yaw) * 2.45, hz = it.z + Math.sin(-it.yaw) * 2.45;
       const seed = r();
       this.glows.push({ x: hx, y: 8.55, z: hz, c, size: 3.2, seed, flick });
-      this.glows.push({ x: hx, y: 8.5, z: hz, c: c.clone().multiplyScalar(0.25), size: 11, seed, flick });
+      this.glows.push({ x: hx, y: 8.5, z: hz, c: c.clone().multiplyScalar(0.18), size: 8, seed, flick });
       this.pools.push({ x: hx, z: hz, c: c.clone().multiplyScalar(0.85), r: 8.5, h: 8.6, seed, flick });
     });
     mesh.castShadow = true; mesh.receiveShadow = true;
@@ -250,46 +251,60 @@ export class Street {
 
   _cars() {
     const r = this.r;
-    const { car, bus, truck } = this._carGeo();
-    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.45, roughness: 0.38 });
-    const paints = [0x8a1c1c, 0x1c3a6a, 0xb0b0b0, 0x202226, 0x6a6a20, 0xd0d0d0, 0x2a5a3a, 0x7a4a1a, 0x4a2a5a];
-    const lists = { car: [], bus: [], truck: [] };
+    const { truck } = this._carGeo();
+    let P = null;
+    try { P = loadProps(); } catch (e) { console.warn('[ZD] vehicle models unavailable, using boxes:', e); }
+    const boxMat = new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.45, roughness: 0.38 });
+    const paints = [0x8a1c1c, 0x1c3a6a, 0xb0b0b0, 0x202226, 0x6a6a20, 0xd0d0d0, 0x2a5a3a, 0x7a4a1a, 0x4a2a5a, 0x5a6a7a];
+    const lists = {};
+    const add = (k, v) => (lists[k] || (lists[k] = [])).push(v);
     const pylons = this.world.pylons;
-    for (let n = 0; n < 900 && lists.car.length < 210; n++) {
+    let nCars = 0;
+    for (let n = 0; n < 900 && nCars < 210; n++) {
       const alongZ = r() < 0.5, k = Math.floor(r() * (N + 1)), m = Math.floor(r() * N);
       const along = roadLine(m) + 16 + r() * (CELL - 32);
       const lane = (r() < 0.5 ? -1 : 1) * (3 + r() * 4.5);
       const x = alongZ ? roadLine(k) + lane : along, z = alongZ ? along : roadLine(k) + lane;
       if (this.inPlaza(x, z, 6) || this.blocked(x, z, 2)) continue;
       if (pylons.some((p) => Math.hypot(p.x - x, p.z - z) < 18)) continue;
-      const v = r(), kind = v < 0.07 ? 'bus' : v < 0.13 ? 'truck' : 'car';
+      const v = r();
+      let kind = v < 0.07 ? (r() < 0.6 ? 'bus' : 'schoolbus') : v < 0.12 ? 'truck' : v < 0.15 ? 'cop' : v < 0.17 ? 'ambulance' : ['car1', 'car2', 'suv', 'sports'][Math.floor(r() * 4)];
+      if (!P && kind !== 'truck') kind = kind.includes('bus') ? 'bus' : 'car1';
       const crashed = r() < 0.25;
       const yaw = (alongZ ? 0 : Math.PI / 2) + (r() < 0.5 ? 0 : Math.PI) + (crashed ? (r() - 0.5) * 2.2 : (r() - 0.5) * 0.25);
       const burning = r() < 0.08, burnt = burning || r() < 0.12;
-      const flipped = crashed && kind === 'car' && r() < 0.15;
+      const flipped = crashed && !kind.includes('bus') && kind !== 'truck' && r() < 0.15;
       const col = new THREE.Color(burnt ? 0x16120f : paints[Math.floor(r() * paints.length)]);
-      lists[kind].push({ x, z, yaw, col, burning, flipped, hazard: !burnt && r() < 0.12 });
+      add(kind, { x, z, yaw, col, burning, burnt, flipped, crashed, hazard: !burnt && r() < 0.12 });
+      nCars++;
     }
     const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
-    for (const [kind, geo] of [['car', car], ['bus', bus], ['truck', truck]]) {
-      const l = lists[kind];
+    this.vehicleMats = [];
+    this.cones = [];
+    for (const [kind, l] of Object.entries(lists)) {
+      const model = P && P[kind];
+      const geo = model ? model.geometry : kind === 'truck' ? truck : this._carGeo().car;
+      const mat = model ? propMaterial(model) : boxMat;
+      if (model) this.vehicleMats.push(mat);
       const mesh = new THREE.InstancedMesh(geo, mat, l.length);
+      const height = model ? model.size[1] : 1.6, len = model ? model.size[2] / 2 : kind === 'truck' ? 3.6 : 2.1;
       l.forEach((c, i) => {
         e.set(c.flipped ? 0 : (r() - 0.5) * 0.04, c.yaw, c.flipped ? Math.PI : (r() - 0.5) * 0.04);
         q.setFromEuler(e);
-        m4.compose(new THREE.Vector3(c.x, c.flipped ? (kind === 'car' ? 1.55 : 0) : 0, c.z), q, new THREE.Vector3(1, 1, 1));
+        m4.compose(new THREE.Vector3(c.x, c.flipped ? height : 0, c.z), q, new THREE.Vector3(1, 1, 1));
         mesh.setMatrixAt(i, m4);
-        mesh.setColorAt(i, c.col);
-        const len = kind === 'bus' ? 5.5 : kind === 'truck' ? 3.6 : 2.1;
+        mesh.setColorAt(i, c.burnt ? c.col : (model && model.flags.includes(1) ? c.col : new THREE.Color(1, 1, 1)));
         if (c.burning) {
-          this.burning.push({ x: c.x, z: c.z, size: kind === 'car' ? 2.6 : 4, acc: 0, sacc: 0 });
-          this.pools.push({ x: c.x, z: c.z, c: new THREE.Color(1.0, 0.42, 0.1).multiplyScalar(1.6), r: kind === 'car' ? 10 : 14, h: 3, seed: r(), flick: 0.4 });
+          const big = len > 3;
+          this.burning.push({ x: c.x, z: c.z, size: big ? 4 : 2.6, acc: 0, sacc: 0 });
+          this.pools.push({ x: c.x, z: c.z, c: new THREE.Color(1.0, 0.42, 0.1).multiplyScalar(1.6), r: big ? 14 : 10, h: 3, seed: r(), flick: 0.4 });
           this.glows.push({ x: c.x, y: 2.5, z: c.z, c: new THREE.Color(1, 0.4, 0.1).multiplyScalar(0.5), size: 16, seed: r(), flick: 0.3 });
         }
+        if (c.crashed && r() < 0.6) for (let k = 0; k < 3; k++) this.cones.push({ x: c.x + (r() - 0.5) * 9, z: c.z + (r() - 0.5) * 9, yaw: r() * 6, down: r() < 0.3 });
         if (c.hazard) {
           const fx0 = Math.sin(c.yaw), fz0 = Math.cos(c.yaw), sx = Math.cos(c.yaw), sz = -Math.sin(c.yaw);
           for (const [a, s] of [[len, 1], [len, -1], [-len, 1], [-len, -1]]) {
-            this.glows.push({ x: c.x + fx0 * a + sx * s * 0.75, y: 0.75, z: c.z + fz0 * a + sz * s * 0.75, c: new THREE.Color(1.6, 0.75, 0.1), size: 1.6, seed: 0.5, flick: 0 , hazard: true });
+            this.glows.push({ x: c.x + fx0 * a + sx * s * 0.75, y: 0.75, z: c.z + fz0 * a + sz * s * 0.75, c: new THREE.Color(1.6, 0.75, 0.1), size: 1.6, seed: 0.5, flick: 0, hazard: true });
           }
         }
       });
@@ -303,6 +318,43 @@ export class Street {
       this.hazard = new GlowBillboards(this.scene, hz, this.soft);
       this.updaters.push((t) => { this.hazard.mesh.visible = Math.sin(t * 5) > 0; });
     }
+    if (P) this._trafficLightsAndCones(P);
+  }
+
+  // dead traffic signals blinking amber at the intersections, cones around the wrecks
+  _trafficLightsAndCones(P) {
+    const r = this.r;
+    const L = [];
+    for (let a = 1; a < N; a++) for (let b = 1; b < N; b++) {
+      const x = roadLine(a), z = roadLine(b);
+      if (this.inPlaza(x, z, 14)) continue;
+      for (const [sx, sz] of [[1, 1], [-1, -1]]) {
+        const px = x + sx * 11.5, pz = z + sz * 11.5;
+        if (this.blocked(px, pz, 0.5)) continue;
+        L.push({ x: px, z: pz, yaw: Math.atan2(x - px, z - pz) + (r() - 0.5) * 0.2, tilt: r() < 0.08 ? 0.35 : 0 });
+        if (r() < 0.6) this.glows.push({ x: px, y: 5.0, z: pz, c: new THREE.Color(1.4, 0.8, 0.1).multiplyScalar(0.5), size: 3.5, seed: r(), flick: 0, amber: true });
+      }
+    }
+    const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
+    const tl = P.trafficlight, tm = propMaterial(tl, { roughness: 0.6, metalness: 0.5 });
+    this.vehicleMats.push(tm);
+    const lm = new THREE.InstancedMesh(tl.geometry, tm, L.length);
+    L.forEach((l, i) => { e.set(l.tilt, l.yaw, 0); q.setFromEuler(e); m4.compose(new THREE.Vector3(l.x, 0, l.z), q, new THREE.Vector3(1, 1, 1)); lm.setMatrixAt(i, m4); });
+    lm.castShadow = true;
+    this.scene.add(lm);
+    const am = this.glows.filter((g) => g.amber);
+    this.glows = this.glows.filter((g) => !g.amber);
+    if (am.length) {
+      this.amber = new GlowBillboards(this.scene, am, this.soft);
+      this.updaters.push((t) => { this.amber.mesh.visible = (t % 1.4) < 0.7; });
+    }
+    const cone = P.cone, cm = new THREE.InstancedMesh(cone.geometry, propMaterial(cone, { roughness: 0.7, metalness: 0 }), this.cones.length);
+    this.cones.forEach((c, i) => {
+      e.set(c.down ? Math.PI / 2 : 0, c.yaw, 0); q.setFromEuler(e);
+      m4.compose(new THREE.Vector3(c.x, c.down ? 0.3 : 0, c.z), q, new THREE.Vector3(1, 1, 1)); cm.setMatrixAt(i, m4);
+    });
+    cm.castShadow = true;
+    this.scene.add(cm);
   }
 
   // ------------------------------------------------------------ barricades, sandbags, tank traps
@@ -472,7 +524,7 @@ export class Street {
         const fx0 = nx ? (nx > 0 ? b.maxX : b.minX) : b.x + along, fz0 = nz ? (nz > 0 ? b.maxZ : b.minZ) : b.z + along;
         let px, pz, rx, rz;
         if (blade) { px = fx0 + nx * (w / 2 + 0.4); pz = fz0 + nz * (w / 2 + 0.4); rx = nx; rz = nz; }
-        else { px = fx0 + nx * 0.25; pz = fz0 + nz * 0.25; rx = -nz; rz = nx; }
+        else { px = fx0 + nx * 0.25; pz = fz0 + nz * 0.25; rx = nz; rz = -nx; }      // reads left-to-right from the street
         const idx = Math.floor(r() * SIGNS.length);
         items.push({ px, py: y, pz, rx, rz, w, h, u: (idx % 2) * 0.5, v: 1 - (Math.floor(idx / 2) + 1) / 8, seed: r(), flick: r() < 0.25 ? 1 : 0 });
         if (y < 12) {     // reflection on the wet street
@@ -518,7 +570,7 @@ export class Street {
     const r = this.r;
     const metal = new THREE.MeshStandardMaterial({ color: 0x3a3e46, metalness: 0.7, roughness: 0.4 });
     const head = new THREE.MeshStandardMaterial({ color: 0x222222, emissive: 0xfff4dd, emissiveIntensity: 2.5 });
-    const coneMat = () => beamMaterial(0xfff0d0, 0.09);
+    const coneMat = () => beamMaterial(0xfff0d0, 0.03);
     this.floods = [];
     for (const [x, z] of [[-70, -30], [70, -70], [70, 60], [-62, 66]]) {
       const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.4, 16, 8), metal);
@@ -534,7 +586,7 @@ export class Street {
       bar.add(box, lamp, cone);
       this.scene.add(pole, bar);
       this.glows.push({ x, y: 16, z, c: new THREE.Color(1.6, 1.5, 1.3), size: 7, seed: r(), flick: 0 });
-      this.pools.push({ x: x * 0.45, z: z * 0.45, c: new THREE.Color(1, 0.95, 0.85).multiplyScalar(0.55), r: 16, h: 16, seed: r(), flick: 0 });
+      this.pools.push({ x: x * 0.45, z: z * 0.45, c: new THREE.Color(1, 0.95, 0.85).multiplyScalar(0.3), r: 14, h: 16, seed: r(), flick: 0 });
       this.floods.push(cone);
     }
     // army trucks and a generator by the lab
@@ -567,6 +619,8 @@ export class Street {
     this.glowSet.update(t, fog);
     this.poolSet.update(t, fog);
     if (this.hazard) this.hazard.update(t, fog);
+    if (this.amber) this.amber.update(t, fog);
+    for (const m of this.vehicleMats || []) if (m.userData.shader) m.userData.shader.uniforms.uTime.value = t;
     if (this.roofBeacons) this.roofBeacons.update(t, fog);
     this.signMat.uniforms.uTime.value = t; this.signMat.uniforms.uFogDensity.value = fog.density;
     for (const u of this.updaters) u(t);
