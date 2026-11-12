@@ -1,0 +1,10 @@
+../Core/Src/soft_i2c.c:12:13:delay_half	16	static
+../Core/Src/soft_i2c.c:18:13:clk_enable	32	static
+../Core/Src/soft_i2c.c:31:6:soft_i2c_init	40	static
+../Core/Src/soft_i2c.c:50:6:soft_i2c_release	16	static
+../Core/Src/soft_i2c.c:56:13:scl_high	24	static
+../Core/Src/soft_i2c.c:63:13:start	16	static
+../Core/Src/soft_i2c.c:70:13:stop	16	static
+../Core/Src/soft_i2c.c:77:12:write_byte	24	static
+../Core/Src/soft_i2c.c:94:5:soft_i2c_probe	24	static
+../Core/Src/soft_i2c.c:103:5:soft_i2c_write	32	static

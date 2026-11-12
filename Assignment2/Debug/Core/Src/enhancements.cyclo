@@ -1,0 +1,17 @@
+../Core/Src/enhancements.c:39:6:enh_init	6
+../Core/Src/enhancements.c:84:13:self_test	5
+../Core/Src/enhancements.c:99:13:run_command	11
+../Core/Src/enhancements.c:146:13:game_events	10
+../Core/Src/enhancements.c:160:13:draw_hud	1
+../Core/Src/enhancements.c:178:6:enh_update	20
+../Core/Src/enhancements.c:232:6:enh_on_mode	2
+../Core/Src/enhancements.c:252:5:enh_manual_fire	1
+../Core/Src/enhancements.c:261:5:enh_take_fire_request	1
+../Core/Src/enhancements.c:270:6:enh_on_fire_not_ready	1
+../Core/Src/enhancements.c:275:5:enh_take_charge_request	4
+../Core/Src/enhancements.c:287:6:enh_on_laser_fired	1
+../Core/Src/enhancements.c:295:5:enh_take_tof_grab	1
+../Core/Src/enhancements.c:300:6:enh_on_attacked	2
+../Core/Src/enhancements.c:315:6:enh_on_attack_tick	3
+../Core/Src/enhancements.c:325:6:enh_on_rescued	1
+../Core/Src/enhancements.c:336:6:enh_on_terminated	3

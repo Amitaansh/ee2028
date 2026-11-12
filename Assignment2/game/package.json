@@ -1,0 +1,9 @@
+{
+  "name": "the-last-of-ee2028-game",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Three.js zombie-drone flight game controlled by the STM32 B-L4S5I-IOT01A over Web Serial (EE2028 Assignment 2)",
+  "scripts": { "build": "node build.mjs" },
+  "dependencies": { "three": "0.170.0" },
+  "devDependencies": { "esbuild": "0.24.0" }
+}

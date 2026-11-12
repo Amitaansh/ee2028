@@ -1,0 +1,8 @@
+../Core/Src/hud.c:18:13:title	24	static
+../Core/Src/hud.c:25:13:range_line	56	static
+../Core/Src/hud.c:35:13:splash	16	static
+../Core/Src/hud.c:43:13:attacked	40	static
+../Core/Src/hud.c:57:13:standby	56	static
+../Core/Src/hud.c:75:13:battle	48	static
+../Core/Src/hud.c:107:6:hud_draw	24	static
+../Core/Src/hud.c:121:6:hud_signal_lost	8	static

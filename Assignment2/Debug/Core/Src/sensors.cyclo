@@ -1,0 +1,11 @@
+../Core/Src/sensors.c:39:6:sensors_init	1
+../Core/Src/sensors.c:49:6:read_sensors	3
+../Core/Src/sensors.c:78:9:read_accel_z_mg	1
+../Core/Src/sensors.c:86:6:read_magneto_calibrated	2
+../Core/Src/sensors.c:93:5:sensors_calibrate_magneto	11
+../Core/Src/sensors.c:147:5:sensors_calibrate_gyro	10
+../Core/Src/sensors.c:187:5:sensors_calibrate_temp	7
+../Core/Src/sensors.c:213:7:sensors_temp_offset	1
+../Core/Src/sensors.c:215:6:sensors_print_calibration	1
+../Core/Src/sensors.c:232:7:sensors_temp_first	2
+../Core/Src/sensors.c:234:5:check	3

@@ -1,0 +1,4 @@
+../Core/Src/uart_rx.c:20:6:uart_rx_init	16	static
+../Core/Src/uart_rx.c:29:6:uart_rx_stop	8	static
+../Core/Src/uart_rx.c:35:6:USART1_IRQHandler	16	static
+../Core/Src/uart_rx.c:49:5:uart_rx_read_line	24	static

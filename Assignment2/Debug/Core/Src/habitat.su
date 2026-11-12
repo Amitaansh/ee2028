@@ -1,0 +1,2 @@
+../Core/Src/habitat.c:15:7:habitat_wet_bulb	24	static
+../Core/Src/habitat.c:23:5:habitat_ok	24	static

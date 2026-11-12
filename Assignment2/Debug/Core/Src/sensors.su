@@ -1,0 +1,11 @@
+../Core/Src/sensors.c:39:6:sensors_init	8	static
+../Core/Src/sensors.c:49:6:read_sensors	56	static
+../Core/Src/sensors.c:78:9:read_accel_z_mg	16	static
+../Core/Src/sensors.c:86:6:read_magneto_calibrated	32	static
+../Core/Src/sensors.c:93:5:sensors_calibrate_magneto	280	static
+../Core/Src/sensors.c:147:5:sensors_calibrate_gyro	280	static
+../Core/Src/sensors.c:187:5:sensors_calibrate_temp	296	static
+../Core/Src/sensors.c:213:7:sensors_temp_offset	4	static
+../Core/Src/sensors.c:215:6:sensors_print_calibration	240	static
+../Core/Src/sensors.c:232:7:sensors_temp_first	4	static
+../Core/Src/sensors.c:234:5:check	176	static

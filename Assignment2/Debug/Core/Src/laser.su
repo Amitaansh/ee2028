@@ -1,0 +1,14 @@
+../Core/Src/laser.c:42:6:TIM7_IRQHandler	16	static
+../Core/Src/laser.c:53:16:rest_mode	4	static
+../Core/Src/laser.c:55:13:set_mode	16	static
+../Core/Src/laser.c:66:6:laser_set_glow_pct	16	static
+../Core/Src/laser.c:75:5:laser_glow_pct	4	static
+../Core/Src/laser.c:77:6:laser_init	48	static
+../Core/Src/laser.c:111:13:start	24	static
+../Core/Src/laser.c:122:6:laser_shot	24	static
+../Core/Src/laser.c:128:6:laser_test	16	static
+../Core/Src/laser.c:130:6:laser_cancel	8	static
+../Core/Src/laser.c:136:6:laser_glow	16	static
+../Core/Src/laser.c:143:6:laser_kill	8	static
+../Core/Src/laser.c:155:5:laser_is_on	4	static
+../Core/Src/laser.c:157:6:laser_update	16	static

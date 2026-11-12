@@ -1,0 +1,4 @@
+../Core/Src/nav.c:19:6:nav_reset	4	static
+../Core/Src/nav.c:21:6:nav_update	24	static
+../Core/Src/nav.c:35:7:nav_altitude	4	static
+../Core/Src/nav.c:36:7:nav_heading	4	static

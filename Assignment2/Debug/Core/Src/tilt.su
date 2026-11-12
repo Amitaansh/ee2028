@@ -1,0 +1,4 @@
+../Core/Src/tilt.c:22:6:tilt_reset	4	static
+../Core/Src/tilt.c:24:6:tilt_update	24	static
+../Core/Src/tilt.c:36:7:tilt_pitch	4	static
+../Core/Src/tilt.c:37:7:tilt_roll	4	static

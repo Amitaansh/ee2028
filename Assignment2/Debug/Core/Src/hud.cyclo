@@ -1,0 +1,8 @@
+../Core/Src/hud.c:18:13:title	1
+../Core/Src/hud.c:25:13:range_line	6
+../Core/Src/hud.c:35:13:splash	2
+../Core/Src/hud.c:43:13:attacked	3
+../Core/Src/hud.c:57:13:standby	3
+../Core/Src/hud.c:75:13:battle	4
+../Core/Src/hud.c:107:6:hud_draw	6
+../Core/Src/hud.c:121:6:hud_signal_lost	1

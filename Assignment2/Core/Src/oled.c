@@ -1,0 +1,276 @@
+/******************************************************************************
+ * oled.c - 128x64 I2C OLED driver for the 1.3" module (SH1106, also SSD1306)
+ *
+ * - Bytes go out through oled_bus.c (hardware I2C on the Grove I2C port, or
+ *   software I2C wherever the module was found).
+ * - 1 KB frame buffer + 1 KB copy of what is on the glass. Only pages that
+ *   changed are sent, ONE page per oled_flush_step() call, so a refresh never
+ *   blocks the main loop for more than ~3 ms (keeps the 50 Hz tilt stream smooth).
+ * - Page addressing commands are used, which both SH1106 and SSD1306 accept.
+ *   SH1106 RAM is 132 columns wide, the glass starts at column 2 (OLED_COL_OFFSET).
+ * - Font: classic 5x7 ASCII font from the Adafruit GFX library (BSD licence).
+ ******************************************************************************/
+#include "oled.h"
+#include "app_config.h"
+#include "oled_bus.h"
+#include <string.h>
+#include <stdio.h>
+
+static uint8_t ok;                          /* 1 = display found and initialised */
+static uint8_t fb[8][OLED_W];               /* what we want on screen */
+static uint8_t shown[8][OLED_W];            /* what is on screen */
+static uint8_t dirty;                       /* bit n = page n differs */
+static uint8_t need_check;                  /* set by oled_clear(): a new frame was drawn */
+
+static const uint8_t font5x7[95][5] = {
+    {0x00, 0x00, 0x00, 0x00, 0x00}, /* ' ' */
+    {0x00, 0x00, 0x5F, 0x00, 0x00}, /* '!' */
+    {0x00, 0x07, 0x00, 0x07, 0x00}, /* '"' */
+    {0x14, 0x7F, 0x14, 0x7F, 0x14}, /* '#' */
+    {0x24, 0x2A, 0x7F, 0x2A, 0x12}, /* '$' */
+    {0x23, 0x13, 0x08, 0x64, 0x62}, /* '%' */
+    {0x36, 0x49, 0x56, 0x20, 0x50}, /* '&' */
+    {0x00, 0x08, 0x07, 0x03, 0x00}, /* ''' */
+    {0x00, 0x1C, 0x22, 0x41, 0x00}, /* '(' */
+    {0x00, 0x41, 0x22, 0x1C, 0x00}, /* ')' */
+    {0x2A, 0x1C, 0x7F, 0x1C, 0x2A}, /* '*' */
+    {0x08, 0x08, 0x3E, 0x08, 0x08}, /* '+' */
+    {0x00, 0x80, 0x70, 0x30, 0x00}, /* ',' */
+    {0x08, 0x08, 0x08, 0x08, 0x08}, /* '-' */
+    {0x00, 0x00, 0x60, 0x60, 0x00}, /* '.' */
+    {0x20, 0x10, 0x08, 0x04, 0x02}, /* '/' */
+    {0x3E, 0x51, 0x49, 0x45, 0x3E}, /* '0' */
+    {0x00, 0x42, 0x7F, 0x40, 0x00}, /* '1' */
+    {0x72, 0x49, 0x49, 0x49, 0x46}, /* '2' */
+    {0x21, 0x41, 0x49, 0x4D, 0x33}, /* '3' */
+    {0x18, 0x14, 0x12, 0x7F, 0x10}, /* '4' */
+    {0x27, 0x45, 0x45, 0x45, 0x39}, /* '5' */
+    {0x3C, 0x4A, 0x49, 0x49, 0x31}, /* '6' */
+    {0x41, 0x21, 0x11, 0x09, 0x07}, /* '7' */
+    {0x36, 0x49, 0x49, 0x49, 0x36}, /* '8' */
+    {0x46, 0x49, 0x49, 0x29, 0x1E}, /* '9' */
+    {0x00, 0x00, 0x14, 0x00, 0x00}, /* ':' */
+    {0x00, 0x40, 0x34, 0x00, 0x00}, /* ';' */
+    {0x00, 0x08, 0x14, 0x22, 0x41}, /* '<' */
+    {0x14, 0x14, 0x14, 0x14, 0x14}, /* '=' */
+    {0x00, 0x41, 0x22, 0x14, 0x08}, /* '>' */
+    {0x02, 0x01, 0x59, 0x09, 0x06}, /* '?' */
+    {0x3E, 0x41, 0x5D, 0x59, 0x4E}, /* '@' */
+    {0x7C, 0x12, 0x11, 0x12, 0x7C}, /* 'A' */
+    {0x7F, 0x49, 0x49, 0x49, 0x36}, /* 'B' */
+    {0x3E, 0x41, 0x41, 0x41, 0x22}, /* 'C' */
+    {0x7F, 0x41, 0x41, 0x41, 0x3E}, /* 'D' */
+    {0x7F, 0x49, 0x49, 0x49, 0x41}, /* 'E' */
+    {0x7F, 0x09, 0x09, 0x09, 0x01}, /* 'F' */
+    {0x3E, 0x41, 0x41, 0x51, 0x73}, /* 'G' */
+    {0x7F, 0x08, 0x08, 0x08, 0x7F}, /* 'H' */
+    {0x00, 0x41, 0x7F, 0x41, 0x00}, /* 'I' */
+    {0x20, 0x40, 0x41, 0x3F, 0x01}, /* 'J' */
+    {0x7F, 0x08, 0x14, 0x22, 0x41}, /* 'K' */
+    {0x7F, 0x40, 0x40, 0x40, 0x40}, /* 'L' */
+    {0x7F, 0x02, 0x1C, 0x02, 0x7F}, /* 'M' */
+    {0x7F, 0x04, 0x08, 0x10, 0x7F}, /* 'N' */
+    {0x3E, 0x41, 0x41, 0x41, 0x3E}, /* 'O' */
+    {0x7F, 0x09, 0x09, 0x09, 0x06}, /* 'P' */
+    {0x3E, 0x41, 0x51, 0x21, 0x5E}, /* 'Q' */
+    {0x7F, 0x09, 0x19, 0x29, 0x46}, /* 'R' */
+    {0x26, 0x49, 0x49, 0x49, 0x32}, /* 'S' */
+    {0x03, 0x01, 0x7F, 0x01, 0x03}, /* 'T' */
+    {0x3F, 0x40, 0x40, 0x40, 0x3F}, /* 'U' */
+    {0x1F, 0x20, 0x40, 0x20, 0x1F}, /* 'V' */
+    {0x3F, 0x40, 0x38, 0x40, 0x3F}, /* 'W' */
+    {0x63, 0x14, 0x08, 0x14, 0x63}, /* 'X' */
+    {0x03, 0x04, 0x78, 0x04, 0x03}, /* 'Y' */
+    {0x61, 0x59, 0x49, 0x4D, 0x43}, /* 'Z' */
+    {0x00, 0x7F, 0x41, 0x41, 0x41}, /* '[' */
+    {0x02, 0x04, 0x08, 0x10, 0x20}, /* 'backslash' */
+    {0x00, 0x41, 0x41, 0x41, 0x7F}, /* ']' */
+    {0x04, 0x02, 0x01, 0x02, 0x04}, /* '^' */
+    {0x40, 0x40, 0x40, 0x40, 0x40}, /* '_' */
+    {0x00, 0x03, 0x07, 0x08, 0x00}, /* '`' */
+    {0x20, 0x54, 0x54, 0x78, 0x40}, /* 'a' */
+    {0x7F, 0x28, 0x44, 0x44, 0x38}, /* 'b' */
+    {0x38, 0x44, 0x44, 0x44, 0x28}, /* 'c' */
+    {0x38, 0x44, 0x44, 0x28, 0x7F}, /* 'd' */
+    {0x38, 0x54, 0x54, 0x54, 0x18}, /* 'e' */
+    {0x00, 0x08, 0x7E, 0x09, 0x02}, /* 'f' */
+    {0x18, 0xA4, 0xA4, 0x9C, 0x78}, /* 'g' */
+    {0x7F, 0x08, 0x04, 0x04, 0x78}, /* 'h' */
+    {0x00, 0x44, 0x7D, 0x40, 0x00}, /* 'i' */
+    {0x20, 0x40, 0x40, 0x3D, 0x00}, /* 'j' */
+    {0x7F, 0x10, 0x28, 0x44, 0x00}, /* 'k' */
+    {0x00, 0x41, 0x7F, 0x40, 0x00}, /* 'l' */
+    {0x7C, 0x04, 0x78, 0x04, 0x78}, /* 'm' */
+    {0x7C, 0x08, 0x04, 0x04, 0x78}, /* 'n' */
+    {0x38, 0x44, 0x44, 0x44, 0x38}, /* 'o' */
+    {0xFC, 0x18, 0x24, 0x24, 0x18}, /* 'p' */
+    {0x18, 0x24, 0x24, 0x18, 0xFC}, /* 'q' */
+    {0x7C, 0x08, 0x04, 0x04, 0x08}, /* 'r' */
+    {0x48, 0x54, 0x54, 0x54, 0x24}, /* 's' */
+    {0x04, 0x04, 0x3F, 0x44, 0x24}, /* 't' */
+    {0x3C, 0x40, 0x40, 0x20, 0x7C}, /* 'u' */
+    {0x1C, 0x20, 0x40, 0x20, 0x1C}, /* 'v' */
+    {0x3C, 0x40, 0x30, 0x40, 0x3C}, /* 'w' */
+    {0x44, 0x28, 0x10, 0x28, 0x44}, /* 'x' */
+    {0x4C, 0x90, 0x90, 0x90, 0x7C}, /* 'y' */
+    {0x44, 0x64, 0x54, 0x4C, 0x44}, /* 'z' */
+    {0x00, 0x08, 0x36, 0x41, 0x00}, /* '{' */
+    {0x00, 0x00, 0x77, 0x00, 0x00}, /* '|' */
+    {0x00, 0x41, 0x36, 0x08, 0x00}, /* '}' */
+    {0x02, 0x01, 0x02, 0x04, 0x02}, /* '~' */
+};
+
+static int cmd(const uint8_t *c, uint16_t n)
+{
+	return oled_bus_write(0x00, c, n);              /* control byte 0x00 = command stream */
+}
+
+static int send_page(int p)
+{
+	uint8_t c[3];
+	uint8_t col = OLED_COL_OFFSET;
+	c[0] = (uint8_t)(0xB0 | p);                 /* page address */
+	c[1] = (uint8_t)(0x00 | (col & 0x0F));      /* lower column */
+	c[2] = (uint8_t)(0x10 | (col >> 4));        /* higher column */
+	if (!cmd(c, 3)) return 0;
+	if (!oled_bus_write(0x40, fb[p], OLED_W)) return 0;   /* control byte 0x40 = pixel data */
+	memcpy(shown[p], fb[p], OLED_W);
+	return 1;
+}
+
+int oled_init(void)
+{
+	static const uint8_t init_seq[] = {
+		0xAE,             /* display off */
+		0xD5, 0x80,       /* clock divide */
+		0xA8, 0x3F,       /* multiplex 64 */
+		0xD3, 0x00,       /* display offset */
+		0x40,             /* start line 0 */
+		0x8D, 0x14,       /* SSD1306 charge pump on (SH1106 ignores it, its DC-DC is on at reset) */
+		0xA1,             /* segment remap (column 127 -> SEG0) */
+		0xC8,             /* COM scan direction remapped */
+		0xDA, 0x12,       /* COM pins */
+		0x81, 0xCF,       /* contrast */
+		0xD9, 0xF1,       /* pre-charge */
+		0xDB, 0x40,       /* VCOMH */
+		0xA4,             /* output follows RAM */
+		0xA6,             /* normal (not inverted) */
+	};
+
+	ok = (uint8_t)oled_bus_find();              /* hardware I2C first, then any Grove port */
+	if (!ok) return 0;
+
+	if (!cmd(init_seq, sizeof(init_seq))) { ok = 0; return 0; }
+	{ uint8_t on = 0xAF; cmd(&on, 1); }
+	memset(fb, 0xFF, sizeof(fb));               /* self-test: whole screen white for 0.3 s */
+	oled_flush_all();
+	HAL_Delay(300);
+	memset(fb, 0, sizeof(fb));
+	memset(shown, 0xFF, sizeof(shown));
+	dirty = 0xFF;
+	oled_flush_all();
+	return 1;
+}
+
+int oled_present(void) { return ok; }
+const char *oled_where(void) { return oled_bus_where(); }
+const char *oled_diag(void) { return oled_bus_diag(); }
+
+void oled_clear(void) { memset(fb, 0, sizeof(fb)); need_check = 1; }
+
+void oled_pixel(int x, int y, int on)
+{
+	if (x < 0 || x >= OLED_W || y < 0 || y >= OLED_H) return;
+	if (on) fb[y >> 3][x] |= (uint8_t)(1 << (y & 7));
+	else    fb[y >> 3][x] &= (uint8_t)~(1 << (y & 7));
+}
+
+void oled_fill_rect(int x, int y, int w, int h, int on)
+{
+	for (int j = y; j < y + h; j++)
+		for (int i = x; i < x + w; i++) oled_pixel(i, j, on);
+}
+
+void oled_hline(int x, int y, int w, int on)
+{
+	for (int i = x; i < x + w; i++) oled_pixel(i, y, on);
+}
+
+void oled_rect(int x, int y, int w, int h)
+{
+	oled_hline(x, y, w, 1);
+	oled_hline(x, y + h - 1, w, 1);
+	for (int j = y; j < y + h; j++) { oled_pixel(x, j, 1); oled_pixel(x + w - 1, j, 1); }
+}
+
+void oled_invert_rect(int x, int y, int w, int h)
+{
+	for (int j = y; j < y + h; j++)
+		for (int i = x; i < x + w; i++) {
+			if (i < 0 || i >= OLED_W || j < 0 || j >= OLED_H) continue;
+			fb[j >> 3][i] ^= (uint8_t)(1 << (j & 7));
+		}
+}
+
+static void draw_char(int x, int y, char ch, int scale, int on)
+{
+	if (ch < 0x20 || ch > 0x7E) ch = '?';
+	const uint8_t *g = font5x7[ch - 0x20];
+	for (int col = 0; col < 5; col++)
+		for (int row = 0; row < 8; row++)
+			if ((g[col] >> row) & 1) {
+				if (scale == 1) oled_pixel(x + col, y + row, on);
+				else oled_fill_rect(x + col * scale, y + row * scale, scale, scale, on);
+			}
+}
+
+void oled_text(int x, int y, const char *s, int scale, int on)
+{
+	while (*s) { draw_char(x, y, *s++, scale, on); x += 6 * scale; }
+}
+
+void oled_text_centered(int y, const char *s, int scale, int on)
+{
+	int w = (int)strlen(s) * 6 * scale - scale;
+	oled_text((OLED_W - w) / 2, y, s, scale, on);
+}
+
+int oled_flush_step(void)
+{
+	if (!ok) return 0;
+	/* after a new frame was drawn, mark the pages whose content differs from the glass */
+	if (need_check) {
+		need_check = 0;
+		for (int p = 0; p < 8; p++)
+			if (!(dirty & (1 << p)) && memcmp(fb[p], shown[p], OLED_W) != 0) dirty |= (uint8_t)(1 << p);
+	}
+	if (!dirty) return 0;
+	for (int p = 0; p < 8; p++) {
+		if (dirty & (1 << p)) {
+			if (send_page(p)) dirty &= (uint8_t)~(1 << p);
+			break;                              /* one page per call */
+		}
+	}
+	int n = 0;
+	for (int p = 0; p < 8; p++) if (dirty & (1 << p)) n++;
+	return n;
+}
+
+void oled_flush_all(void)
+{
+	if (!ok) return;
+	for (int p = 0; p < 8; p++) send_page(p);
+	dirty = 0;
+}
+
+void oled_set_inverted(int inv)
+{
+	uint8_t c = inv ? 0xA7 : 0xA6;
+	if (ok) cmd(&c, 1);
+}
+
+void oled_power(int on)
+{
+	uint8_t c = on ? 0xAF : 0xAE;
+	if (ok) cmd(&c, 1);
+}
