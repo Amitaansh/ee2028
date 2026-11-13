@@ -1,6 +1,7 @@
 /******************************************************************************
- * turret.c - joystick + pan / tilt servos (Yatin's sections 4 and 5, unchanged
- * apart from the wrapper at the bottom). See turret.h for wiring and controls.
+ * turret.c - joystick (section 4) and pan / tilt servos (section 5), written by
+ * Yatin. The wrapper at the bottom connects them to enhancements.c.
+ * See turret.h for the wiring and controls.
  ******************************************************************************/
 #include "turret.h"
 #include "app_config.h"
@@ -126,7 +127,7 @@ static void joystick_calibrate(void)
 	joy_rest[1] = (uint16_t)(sum[1] / 16);
 	joy_raw[0] = joy_last[0] = joy_rest[0];
 	joy_raw[1] = joy_last[1] = joy_rest[1];
-	joy_fault = (uint8_t)(!joy_rest_ok(joy_rest[0]) || !joy_rest_ok(joy_rest[1]));   /* [ENH] */
+	joy_fault = (uint8_t)(!joy_rest_ok(joy_rest[0]) || !joy_rest_ok(joy_rest[1]));   /* [ENH] resting near a rail = wiring fault */
 }
 
 /* The rest position wanders: the spring seldom returns to exactly the same point, and the supply
@@ -197,7 +198,7 @@ static int joystick_click(uint32_t now)
 	uint8_t raw = HAL_GPIO_ReadPin(JOY_SW_PORT, JOY_SW_PIN) == GPIO_PIN_RESET;
 	if (raw == last_raw && raw != stable) {               /* same level twice in a row = real change */
 		stable = raw;
-		joy_sw_down = raw;                                /* [ENH] */
+		joy_sw_down = raw;                                /* [ENH] also used by the wiring check */
 		if (raw) { t_down = now; held = 0; }
 		else if (!held) return 1;
 	}
@@ -336,7 +337,7 @@ static void servo_follow_aim(Servo *s, float deg, float dt)
 }
 
 /* =============================================================================
- * Wrapper used by enhancements.c (replaces Yatin's aim_task / main-loop servo code)
+ * Wrapper used by enhancements.c
  * ============================================================================= */
 static uint32_t t_servo, t_steer, t_override;
 static uint8_t  homing, click_flag, hold_flag;

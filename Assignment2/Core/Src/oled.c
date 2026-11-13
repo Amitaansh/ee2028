@@ -1,11 +1,12 @@
 /******************************************************************************
  * oled.c - 128x64 I2C OLED driver for the 1.3" module (SH1106, also SSD1306)
  *
- * - Bytes go out through oled_bus.c (hardware I2C on the Grove I2C port, or
- *   software I2C wherever the module was found).
+ * - Bytes go out through oled_bus.c (hardware I2C if the display is on an I2C
+ *   peripheral's pins, otherwise software I2C wherever it was found).
  * - 1 KB frame buffer + 1 KB copy of what is on the glass. Only pages that
  *   changed are sent, ONE page per oled_flush_step() call, so a refresh never
- *   blocks the main loop for more than ~3 ms (keeps the 50 Hz tilt stream smooth).
+ *   blocks the main loop for long (~3 ms on hardware I2C, ~12 ms on the
+ *   100 kHz software bus), which keeps the 50 Hz tilt stream smooth.
  * - Page addressing commands are used, which both SH1106 and SSD1306 accept.
  *   SH1106 RAM is 132 columns wide, the glass starts at column 2 (OLED_COL_OFFSET).
  * - Font: classic 5x7 ASCII font from the Adafruit GFX library (BSD licence).

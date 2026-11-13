@@ -124,7 +124,7 @@ Baked into compact binaries by `game/tools/bake-characters.mjs` and `game/tools/
   rusted_shutter (Dimitrios Savva), asphalt_02 (Rob Tuytel).
   https://polyhaven.com/license
 
-## Real-life mode (PLAY IN REAL LIFE tab, Fri 13 Nov)
+## Real-life mode (PLAY IN REAL LIFE tab)
 
 - **onnxruntime-web 1.22.0** (Microsoft, MIT licence): `game/vendor/ort/ort.webgpu.min.js`, `ort-wasm-simd-threaded.jsep.mjs`, `ort-wasm-simd-threaded.jsep.wasm`. Runs the detector in the browser (WebGPU, WebAssembly fallback). Copied unchanged from our L.I.G.H.T project.
 - **YOLOv8n** (Ultralytics, AGPL-3.0, COCO-trained), exported to ONNX with dynamic input size: `game/models/yolov8n-dynamic.onnx`, provenance and hashes in `game/models/yolov8n-export.json`. Copied unchanged from our L.I.G.H.T project.

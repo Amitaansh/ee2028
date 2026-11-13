@@ -7,7 +7,7 @@
 
 #include "main.h"
 
-/* latest sensor readings (magnitudes) - you can overwrite these in the debugger */
+/* latest readings (magnitudes). Globals so they can be overwritten in the debugger */
 extern float T, P, H, A, G, M;
 
 void    sensors_init(void);        /* init all six BSP sensors                    */

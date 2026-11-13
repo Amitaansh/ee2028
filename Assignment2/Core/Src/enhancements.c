@@ -1,9 +1,9 @@
 /******************************************************************************
- * enhancements.c - glue between the minimum-spec game logic and the add-ons
+ * enhancements.c - glue between the minimum-spec game logic and the extras
  *
- * Owns the timing of the add-ons (50 Hz tilt stream, 2 Hz nav, 10 Hz HUD,
- * 100 Hz ToF poll) and decides the reaction to each event, e.g. an attack =
- * buzzer alarm + OLED countdown + "A," lines to the game.
+ * Runs the timing of the extras (50 Hz tilt stream, 2 Hz nav, 10 Hz HUD,
+ * ToF polling, laser, turret) and decides how each event is shown, e.g. an
+ * attack = buzzer alarm + OLED countdown + "A," lines to the game.
  ******************************************************************************/
 #include "enhancements.h"
 #include "app_config.h"
@@ -54,7 +54,7 @@ void enh_init(void)
 {
 	char b[200];
 	t_boot = HAL_GetTick();
-	laser_init();                                     /* first: EN driven off before anything else */
+	laser_init();                                     /* first, so the laser pin is low before anything else */
 
 #if ENH_GAME_LINK
 	game_link_init();
@@ -75,7 +75,7 @@ void enh_init(void)
 	/* buzzer self-test: three clear beeps at every boot */
 	for (int i = 0; i < 3; i++) { buzzer_blocking_tone(120); HAL_Delay(100); }
 #if ENH_LASER && LASER_BOOT_BLIP_MS > 0
-	laser_test(LASER_BOOT_BLIP_MS);                   /* short blip: laser wired correctly */
+	laser_test(LASER_BOOT_BLIP_MS);                   /* short blip to show the laser is wired (off when LASER_BOOT_BLIP_MS is 0) */
 	HAL_Delay(LASER_BOOT_BLIP_MS + 10);
 	laser_cancel();
 #endif
@@ -293,7 +293,7 @@ static void set_gui(int on, const char *why)
 	t_hud = 0;
 }
 
-/* ---------------- turret (Yatin): joystick + pan/tilt servos ---------------- */
+/* ---------------- turret: joystick + pan/tilt servos (Yatin's part) ---------------- */
 static void turret_task(uint32_t now)
 {
 #if ENH_TURRET
@@ -345,7 +345,7 @@ static void turret_task(uint32_t now)
 	(void)now;
 }
 
-/* ---------------- telemetry OLED (Yatin): snapshot + redraw ---------------- */
+/* ---------------- telemetry OLED (Yatin's part): snapshot + redraw ---------------- */
 static void tele_task(uint32_t now)
 {
 #if ENH_TELE_OLED
@@ -516,7 +516,7 @@ int enh_take_fire_request(void)
 }
 
 /* every button event passes through here first: it is shown on the telemetry OLED,
- * and a triple press in BATTLE toggles MANUAL AIM (Yatin's sub-mode) */
+ * and a triple press in BATTLE toggles MANUAL AIM */
 int enh_on_button(int ev, int battle, int attacked)
 {
 	if (ev == BTN_NONE) return ev;

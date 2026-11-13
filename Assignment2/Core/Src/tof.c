@@ -1,28 +1,29 @@
 /******************************************************************************
- * tof.c - "zombie hand" grab detector (reworked Fri 13 Nov 01:30)
+ * tof.c - "zombie hand" grab detector on the VL53L0X
  *
- * Every VL53L0X sample (~30 Hz) is sorted into one of four classes, using the
- * sensor's own status, the distance and the return signal strength:
+ * Every sample (~30 Hz) is put into one of four classes, using the sensor's own
+ * status, the distance and the strength of the return signal:
  *
  *   NEAR    valid reading closer than TOF_NEAR_MM with at least TOF_MIN_SIGNAL
  *           of return signal, or "closer than the minimum range" (hand right on
  *           the sensor, TOF_COVERED_IS_NEAR)
  *   MID     valid reading between TOF_NEAR_MM and TOF_CLEAR_MM (hand hovering)
- *   CLEAR   valid reading beyond TOF_CLEAR_MM, nothing in range, or a weak signal
+ *   CLEAR   valid reading beyond TOF_CLEAR_MM, nothing in range, a weak signal,
+ *           or a "valid" reading under TOF_FLOOR_MM. On our board the sensor
+ *           reads 0 mm when nothing is there (it sees the shield / its cover),
+ *           so that can't count as a hand.
  *   UNSURE  phase fail / hardware fail: the sensor itself doesn't know. A hand
  *           pressed onto the sensor often gives these, so right after a NEAR
  *           sample (< 100 ms) it still counts as NEAR, otherwise it is ignored.
  *
- * Confidence score: NEAR +1, MID -2, CLEAR = 0. A grab is TOF_HIT_SAMPLES of
- * score (6 = ~0.2 s of a hand within 7 cm), while a grab is allowed and the
- * detector is ARMED. It arms after TOF_ARM_SAMPLES non-NEAR readings in a row,
- * so something resting on the sensor can never start an attack by itself, and
- * after a rescue the hand has to leave first (plus TOF_COOLDOWN_MS).
+ * Score: NEAR +1, MID -2, CLEAR resets it. A grab needs TOF_HIT_SAMPLES of score
+ * (6 = about 0.2 s of a hand within 7 cm) while a grab is allowed and the
+ * detector is ARMED. It only arms after TOF_ARM_SAMPLES readings in a row with
+ * no hand, so something resting on the sensor can't start an attack, and after
+ * a rescue the hand has to leave first (plus TOF_COOLDOWN_MS).
  *
- * The old detector needed > 15 cm of free space to arm and an unbroken 0.8 s
- * under 5 cm; wires above the board and phase-fail samples (counted as "nothing
- * there") stopped it from ever firing. tof_range_mm() is still the median of
- * the last TOF_MEDIAN samples, for the OLED and the game's hand graphic.
+ * tof_range_mm() is the median of the last TOF_MEDIAN samples, for the OLED
+ * and the hand graphic in the game.
  ******************************************************************************/
 #include "tof.h"
 #include "vl53l0x.h"
@@ -86,7 +87,7 @@ static int classify(uint32_t now)
 	uint16_t raw = vl53l0x_last_raw();
 	float    sig = vl53l0x_last_signal();
 
-	if (st == ST_VALID && raw < TOF_FLOOR_MM) return C_CLEAR;   /* 0 mm "valid" = cover / shield crosstalk, no hand */
+	if (st == ST_VALID && raw < TOF_FLOOR_MM) return C_CLEAR;   /* 0 mm "valid" = the sensor sees the shield / cover, not a hand */
 	if (st == ST_VALID && raw < 2000) {
 		if (raw < TOF_NEAR_MM) return sig >= TOF_MIN_SIGNAL ? C_NEAR : C_UNSURE;
 		return raw < TOF_CLEAR_MM ? C_MID : C_CLEAR;

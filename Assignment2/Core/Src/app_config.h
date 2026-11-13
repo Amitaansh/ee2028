@@ -76,8 +76,8 @@
 
 /* ============================================================================
  * ENHANCEMENTS ("Zombie Drone")
- * Everything below is additive. Set a switch to 0 to compile that feature out;
- * the minimum specification then behaves exactly as before.
+ * Everything below is extra. Set a switch to 0 to compile that feature out;
+ * with all of them off the board behaves like the plain minimum specification.
  *
  *   clock.c                 80 MHz system clock
  *   uart_rx.c               interrupt-driven UART receive (lines from the PC)
@@ -96,7 +96,7 @@
  * ==========================================================================*/
 #define ENH_FAST_CLOCK   1      /* 80 MHz PLL instead of 4 MHz MSI (sensor I2C at its designed 400 kHz) */
 #define ENH_GAME_LINK    1      /* tilt stream to the PC game + game events back to the board */
-#define ENH_OLED         1      /* 1.3" I2C OLED HUD on the Base Shield Grove I2C port */
+#define ENH_OLED         1      /* 1.3" OLED HUD, plugged into Grove D7 (found by oled_bus.c) */
 #define ENH_BUZZER       1      /* active-high buzzer on Grove port D4 */
 #define ENH_TOF          1      /* VL53L0X hand grab = second way into "The Last of EE2028" */
 #define ENH_LASER        1      /* KY-008 laser on PMOD pin 7 (PD2) fires with the in-game laser */
@@ -107,7 +107,7 @@
 /* ---------------- tilt stream to the game ---------------- */
 #define TILT_PERIOD_MS   20         /* 50 Hz */
 #define TILT_ALPHA       0.35f      /* low-pass weight of a new accel sample (0..1) */
-#define TILT_PITCH_SIGN  (-1)       /* -1: tilting the board's nose UP makes the drone climb (checked on the board 12 Nov) */
+#define TILT_PITCH_SIGN  (-1)       /* -1: tilting the board's nose up makes the drone climb */
 #define TILT_ROLL_SIGN   (+1)       /* flip to -1 if rolling right shows the wrong sign */
 #define LINK_TIMEOUT_MS  3000       /* game counts as connected if it pinged within this */
 #define NAV_PERIOD_MS    500        /* baro altitude + heading update */
@@ -156,8 +156,8 @@
 #define TOF_ATTACK            1     /* 0 = the ToF never starts an attack (range still shown) */
 #define TOF_NEAR_MM           70    /* valid reading closer than this = hand on the drone */
 #define TOF_CLEAR_MM          100   /* further than this (or nothing in range) = hand gone */
-#define TOF_FLOOR_MM          3     /* a "valid" reading below this = the sensor sees its own cover / the shield edge
-                                       (reads 0 mm with nothing there on our board): counts as nothing, not a hand */
+#define TOF_FLOOR_MM          3     /* a "valid" reading below this is the sensor seeing the shield / its cover
+                                       (ours reads 0 mm with nothing there), so it counts as no hand */
 #define TOF_HIT_SAMPLES       6     /* NEAR readings for a grab: 6 = ~0.2 s (raise to 9-12 if too touchy) */
 #define TOF_MIN_SIGNAL        0.5f  /* MCPS: a NEAR reading needs this much return signal ("strong hit") */
 #define TOF_ARM_SAMPLES       6     /* readings without a hand before a grab can happen */
@@ -184,12 +184,12 @@
  *   GUI inactive (Tera Term / spec demo)
  *     STANDBY   joystick click = next telemetry page, hold = recentre the turret
  *     BATTLE    joystick steers the turret servos; laser AUTO-FIRES at >= 5/10 (spec)
- *               triple press = MANUAL AIM (Yatin): no auto-fire, joystick click fires
+ *               triple press = MANUAL AIM: no auto-fire, joystick click fires
  *   GUI active (ENH_MANUAL_FIRE 1)
- *     BATTLE    no auto-fire: fire = hold the blue button >= 0.5 s, joystick click,
- *               or Space / click in the game. Joystick = forward / back + pan (yaw)
- *               of the drone in the game; tilt still climbs / dives and banks.
- *               The turret recentres and holds still.                              */
+ *     BATTLE    no auto-fire: fire = long press on the blue button (>= 0.5 s, fires
+ *               on release), joystick click, or Space / click in the game.
+ *               Joystick = forward / back + pan (yaw) of the drone in the game;
+ *               tilt still climbs / dives and banks. The turret recentres and holds. */
 #define ENH_MANUAL_FIRE  1          /* 1 = no auto-fire while the GUI is active (0 = spec auto-fire always) */
 #define ENH_TRIPLE_AIM   1          /* 1 = triple press toggles MANUAL AIM in BATTLE (GUI inactive) */
 /* Joystick directions. Easiest: type E,JOYCAL in STANDBY (push RIGHT, then UP when asked);
@@ -197,7 +197,7 @@
 #define JOY_SWAP_XY      0          /* 1 = the module is turned 90 deg: A0 is up/down, A1 is left/right */
 #define JOY_INVERT_X     1          /* 1 = reverse left/right */
 #define JOY_INVERT_Y     1          /* 1 = reverse up/down    */
-#define TURRET_AIM_LOG_MS  0        /* > 0: "Aim X: .. Pan: .. us" UART log this often while steering (Yatin used 200) */
+#define TURRET_AIM_LOG_MS  0        /* > 0: "Aim X: .. Pan: .. us" UART log this often while steering (200 works well) */
 
 /* ---------------- REAL-LIFE MODE (game tab "PLAY IN REAL LIFE": webcam + YOLO aim the turret) ----------------
  * The game sends E,RL,1, then E,AIM,<pan x10>,<tilt x10>,<flags> about 25 times a second

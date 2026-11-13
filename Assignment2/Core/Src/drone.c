@@ -1,15 +1,15 @@
 /******************************************************************************
- * drone.c - the game logic
+ * drone.c - game logic
  *
  *   STANDBY_MODE : LED on, telemetry every 1 s, double press -> BATTLE
- *   BATTLE_MODE  : LED blinks 1 Hz, single press charges the laser,
+ *   BATTLE_MODE  : LED blinks at 1 Hz, single press charges the laser,
  *                  double press -> STANDBY, flipping the board = attacked
- *   attacked     : "The Last of EE2028" - LED blinks 2 Hz, double press
- *                  within RESCUE_MS rescues the drone, else it is terminated
+ *   attacked     : "The Last of EE2028". LED blinks at 2 Hz, a double press
+ *                  within RESCUE_MS rescues the drone, otherwise it is terminated
  *
- * Enhancements: the calls marked [ENH] report events to enhancements.c
- * (OLED HUD, buzzer, tilt stream to the PC game, ToF hand grab). The ToF grab
- * is a second way to get attacked, next to flipping the board.
+ * The calls marked [ENH] tell enhancements.c what happened, so the HUD, buzzer,
+ * PC game and laser can react. The ToF hand grab is a second way to get attacked
+ * besides flipping the board.
  ******************************************************************************/
 #include "drone.h"
 #include "app_config.h"
@@ -97,10 +97,10 @@ static void battle_fighting(uint32_t now, int ev)
 		enter_standby();
 		return;
 	}
-	int manual = enh_manual_fire();             /* [ENH] 1 = the player fires (off by default: spec auto-fire) */
+	int manual = enh_manual_fire();             /* [ENH] 1 = the player fires by hand (GUI open or MANUAL AIM), 0 = spec auto-fire */
 
-	/* single press -> charge 3/10 ([ENH] also a game charging pylon; a long press
-	   counts as a single press unless the game is connected) */
+	/* single press -> charge 3/10. [ENH] a charging pylon in the game does the same,
+	   and a long press counts as a single press unless the player fires by hand */
 	if (ev == BTN_SINGLE || (ev == BTN_LONG && !manual) || enh_take_charge_request()) {
 		energy += 3;
 		if (energy > 10) energy = 10;
@@ -115,7 +115,7 @@ static void battle_fighting(uint32_t now, int ev)
 			send(buf);
 			enh_on_laser_fired(energy);                      /* [ENH] */
 		}
-	} else if (ev == BTN_LONG || enh_take_fire_request()) {   /* [ENH] game mode: fire on demand */
+	} else if (ev == BTN_LONG || enh_take_fire_request()) {   /* [ENH] firing by hand: long press, joystick click or the game */
 		if (energy >= 5) {
 			energy -= 5;
 			sprintf(buf, "Laser fired! Charge left: %d/10\r\n", energy);
@@ -137,7 +137,7 @@ static void battle_fighting(uint32_t now, int ev)
 		}
 	}
 
-	/* [ENH] second trigger: a "zombie hand" grabs the drone (ToF range < ~8 cm) */
+	/* [ENH] second trigger: a "zombie hand" held over the ToF sensor */
 	if (enh_take_tof_grab()) start_attack(now, ENH_SRC_TOF);
 }
 

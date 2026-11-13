@@ -1,11 +1,11 @@
 /******************************************************************************
  * tele_oled.c - telemetry OLED (Yatin's driver, graphics and screens)
  *
- * Sections 9-11 of Yatin's single-file main.c, moved here unchanged except:
+ * Sections 9-11 of Yatin's original single-file main.c. Changes for this project:
  *   - the UI_* functions are public (declared in tele_oled.h),
  *   - the sensor table uses the thresholds in app_config.h (same as the UART),
  *   - the text helpers (put_*) are local copies,
- *   - UI_Status() added for messages from the rest of the firmware.
+ *   - UI_Status() shows messages from the rest of the firmware.
  * Everything else in this file is static, so nothing clashes with oled.c / hud.c
  * (the drone HUD on the other display).
  ******************************************************************************/

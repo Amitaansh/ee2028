@@ -1,10 +1,10 @@
 /******************************************************************************
- * turret.h - pan / tilt laser turret steered by an analog joystick (Yatin)
+ * turret.h - pan / tilt laser turret steered by an analog joystick (Yatin's part)
  *
  *   Servos    PAN  D3 (PB0, TIM3_CH3), TILT D6 (PB1, TIM3_CH4), 50 Hz, red 5V, brown GND
  *   Joystick  VRx A0 (PC5, ADC1_IN14), VRy A1 (PC4, ADC1_IN13), SW D2 (PD14), VCC 3V3
  *
- * The stick sets the turning SPEED; the speed eases in (no jerks) and the pulse
+ * The stick sets the turning speed; the speed eases in (no jerks) and the pulse
  * never leaves the calibrated ends of this mount. The KY-008 laser sits on the
  * turret, so it fires wherever the turret points. What the stick does in each
  * mode is decided in enhancements.c (see the "controls" block in app_config.h).

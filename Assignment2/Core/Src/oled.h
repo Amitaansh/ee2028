@@ -1,7 +1,7 @@
 /******************************************************************************
- * oled.h - 128x64 monochrome I2C OLED driver (SH1106 / SSD1306)
- * Meant for the Seeed Base Shield Grove I2C port (D15 = PB8 SCL, D14 = PB9 SDA,
- * I2C1, separate from the sensor bus); oled_bus.c also finds it elsewhere.
+ * oled.h - 128x64 monochrome I2C OLED driver (SH1106 / SSD1306) for the HUD
+ * oled_bus.c finds the display on any free Grove port (ours is on Grove D7,
+ * D7 = PA4 SCL, D8 = PB2 SDA, software I2C), separate from the sensor bus.
  ******************************************************************************/
 #ifndef OLED_DRIVER_H
 #define OLED_DRIVER_H

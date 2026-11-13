@@ -22,8 +22,9 @@
  *   E,TCAL[,<degC>]  temperature offset (reference from a thermometer, or the power-up reading)
  *   E,CAL            print every calibration value as one block to paste into app_config.h
  *   E,TOF            print the ToF readings 10x a second for 15 s (any mode), to tune TOF_*
- *   E,JOY            print the joystick (raw X/Y, centre, %, button) 10x a second for 15 s (any mode)
- *   E,LASER          laser at full brightness for LASER_TEST_MS (any mode), to check the wiring
+ *   E,JOY            print the joystick (raw X/Y, centre, %, direction, button) 10x a second for 15 s
+ *   E,JOYCAL         joystick directions: push RIGHT, then UP when asked (STANDBY)
+ *   E,LASER          laser at full brightness for LASER_TEST_MS (BATTLE only), to check the wiring
  *   E,LASER,<pct>    set the idle glow brightness in % (until reset; then edit LASER_IDLE_PCT)
  * The game sends E,PING every 2 s; that is how the board knows it is there.
  ******************************************************************************/

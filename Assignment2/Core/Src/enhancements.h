@@ -1,9 +1,9 @@
 /******************************************************************************
- * enhancements.h - the ONLY interface drone.c and main.c use for the add-ons
+ * enhancements.h - the only interface drone.c and main.c use for the extras
  *
- * drone.c (the minimum-spec game logic) calls these hooks at the points where
- * something happens. Each hook fans out to the feature modules (tilt, nav,
- * game_link, buzzer, oled/hud, tof). Remove the hook calls and drone.c is the
+ * drone.c (the minimum-spec game logic) calls these hooks wherever something
+ * happens, and enhancements.c passes it on to the feature modules (game link,
+ * buzzer, OLEDs, ToF, laser, turret). Take the hook calls out and drone.c is the
  * plain minimum specification again.
  ******************************************************************************/
 #ifndef ENHANCEMENTS_H
@@ -20,7 +20,7 @@ void enh_update(uint32_t now, int battle, int attacked, int energy);   /* every 
 /* drone.c event hooks */
 void enh_on_mode(int battle);                      /* entered STANDBY (0) or BATTLE (1) */
 int  enh_take_charge_request(void);                /* game: flew through a charging pylon */
-int  enh_manual_fire(void);                        /* 1 = player fires, no auto fire (off by default) */
+int  enh_manual_fire(void);                        /* 1 = player fires by hand (GUI open, MANUAL AIM or real-life mode), no auto-fire */
 int  enh_take_fire_request(void);                  /* game Space / click, or joystick click in MANUAL AIM */
 void enh_on_fire_not_ready(void);
 void enh_on_laser_fired(int energy_left);

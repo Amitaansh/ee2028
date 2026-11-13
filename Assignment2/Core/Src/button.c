@@ -1,22 +1,23 @@
 /******************************************************************************
- * button.c - button interrupt + single / double (/ triple / long) press decoding
+ * button.c - button interrupt and press decoding
  *
- * Hardware: the blue user button B2 on PC13 is ACTIVE LOW (UM2708 6.12): PC13 is
- * pulled up to 3V3, pressing shorts it to GND. Released = HIGH, pressed = LOW.
- * The board has a 1 k / 100 nF RC filter next to the button.
+ * The blue button B2 on PC13 is active low (UM2708 section 6.12): PC13 is pulled
+ * up to 3V3 and pressing the button shorts it to GND. The board also has a
+ * 1k / 100nF RC filter on it.
  *
- * The EXTI line triggers on BOTH edges [ENH, Fri 13 Nov]:
- *   falling edge (pin LOW)  = pressed  -> only the press time is stored
- *   rising edge  (pin HIGH) = released -> this is the "press" event used below,
- *                                         exactly as before (the BSP's rising edge)
- * Spec: double press = a 2nd release within DOUBLE_MS (0.5 s) of the 1st.
- * [ENH] Long press: held >= LONG_MS before the release, with no press pending.
- *   Reported at the release as BTN_LONG; drone.c treats it as a single press
- *   unless the player fires by hand (GUI open / MANUAL AIM), so the spec is unchanged.
- * [ENH] Triple press (Yatin's MANUAL AIM toggle): a 3rd press within TRIPLE_MS
- * of the 2nd. Only while drone.c allows it (BATTLE, not attacked): then a double
- * press is reported TRIPLE_MS after the 2nd press, once no 3rd press came.
- * In STANDBY and during a rescue the double press is reported at once, as before.
+ * EXTI13 triggers on both edges:
+ *   falling edge (pin LOW)  = pressed, we only note the time
+ *   rising edge  (pin HIGH) = released, this is what counts as a "press" below
+ *
+ * double press = second release within DOUBLE_MS (0.5 s) of the first (spec)
+ * long press   = [ENH] held for at least LONG_MS, with nothing else pending.
+ *                drone.c treats it as a single press unless the player fires by
+ *                hand (GUI open or MANUAL AIM), so the spec behaviour is the same.
+ * triple press = [ENH] third press within TRIPLE_MS of the second, toggles
+ *                MANUAL AIM. Only enabled in BATTLE when not attacked; then a
+ *                double press is reported TRIPLE_MS after the second press if no
+ *                third one came. In STANDBY and during a rescue a double press is
+ *                reported straight away.
  ******************************************************************************/
 #include "button.h"
 #include "app_config.h"
@@ -35,8 +36,8 @@ void button_init(void)
 
 	BSP_PB_Init(BUTTON_USER, BUTTON_MODE_EXTI);      /* clock, pull-up, EXTI13, NVIC (priority 15) */
 
-	/* [ENH] re-configure EXTI13 for both edges (BSP sets the rising edge only):
-	   HAL_GPIO_Init sets both EXTI_RTSR1 and EXTI_FTSR1 bit 13 */
+	/* the BSP only sets the rising edge, so set EXTI13 up again for both edges
+	   (HAL_GPIO_Init sets bit 13 in both EXTI_RTSR1 and EXTI_FTSR1) */
 	g.Pin   = USER_BUTTON_PIN;
 	g.Mode  = GPIO_MODE_IT_RISING_FALLING;
 	g.Pull  = GPIO_PULLUP;
@@ -78,7 +79,7 @@ int get_button_event(void)
 	return e;
 }
 
-/* button interrupt, both edges. The button is ACTIVE LOW: LOW = pressed. */
+/* button interrupt, both edges. Active low: LOW = pressed */
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
 	if (GPIO_Pin != USER_BUTTON_PIN) return;
@@ -86,12 +87,12 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 	uint32_t now = HAL_GetTick();
 
 	if (HAL_GPIO_ReadPin(USER_BUTTON_GPIO_PORT, USER_BUTTON_PIN) == GPIO_PIN_RESET) {
-		down_tick = now;                     /* falling edge: pressed. Just remember when */
+		down_tick = now;                     /* falling edge: pressed, just remember when */
 		is_down = 1;
 		return;
 	}
 
-	/* rising edge: released. This is the press event, as before. */
+	/* rising edge: released, this is the press event */
 	if (now - last_edge < 50) return;        /* debounce: ignore releases < 50 ms apart */
 	last_edge = now;
 	uint32_t held = is_down ? now - down_tick : 0;
@@ -105,7 +106,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 		if (triple_on) { wait_third = 1; second_tick = now; }
 		else           double_press = 1;
 	} else if (!wait_third && held >= LONG_MS) {
-		long_press = 1;                      /* [ENH] held >= LONG_MS on its own: long press */
+		long_press = 1;                      /* held long enough on its own: long press */
 	} else {
 		pending_single = 1;                  /* first press, wait to see if a 2nd comes */
 		press_tick = now;
