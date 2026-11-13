@@ -256,7 +256,7 @@ static void draw_hud(uint32_t now)
 	s.battle = cur_battle;       s.attacked = cur_attacked;   s.attack_src_tof = attack_tof;
 	s.attack_t0 = attack_t0;     s.rescued_until = rescued_until;
 	s.energy = cur_energy;
-	s.pitch = tilt_pitch();      s.roll = tilt_roll();
+	s.pitch = tilt_pitch();      s.roll = HUD_ROLL_SIGN * tilt_roll();
 	s.alt = nav_altitude();      s.heading = nav_heading();
 	s.tof_ok = tof_ok();         s.range_mm = tof_range_mm();
 	s.link = game_link_connected(now);

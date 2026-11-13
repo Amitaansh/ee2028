@@ -108,7 +108,11 @@
 #define TILT_PERIOD_MS   20         /* 50 Hz */
 #define TILT_ALPHA       0.35f      /* low-pass weight of a new accel sample (0..1) */
 #define TILT_PITCH_SIGN  (-1)       /* -1: tilting the board's nose up makes the drone climb */
-#define TILT_ROLL_SIGN   (+1)       /* flip to -1 if rolling right shows the wrong sign */
+#define TILT_ROLL_SIGN   (+1)       /* +1: rolling the mounted board right banks the drone right in the game */
+#define HUD_ROLL_SIGN    (-1)       /* the OLED horizon needs the opposite sign to the game (HUD only) */
+#define TILT_MOUNT_DEG   90         /* how the board sits on its mount, seen from above: 0 = as held in the
+                                       hand, 90 = turned 90 deg left, -90 = turned right, 180 = turned around.
+                                       If pitch AND roll both come out reversed, use the opposite sign. */
 #define LINK_TIMEOUT_MS  3000       /* game counts as connected if it pinged within this */
 #define NAV_PERIOD_MS    500        /* baro altitude + heading update */
 #define BARO_M_PER_HPA   8.4f       /* near sea level pressure drops ~0.12 hPa per metre */

@@ -140,6 +140,7 @@ There is no auto-fire in real-life mode; the spec auto-fire still applies whenev
 * **ToF too touchy:** raise `TOF_HIT_SAMPLES` (9 to 12). `TOF_ATTACK 0` turns the ToF attack off.
 * **Joystick works only while its button is pressed:** the module's GND isn't reaching the board (GND and SW swapped, or GND loose). The firmware detects this at boot (`JOYSTICK WIRING FAULT`) and ignores the stick until it rests mid-scale for 1 s.
 * **Joystick directions wrong:** VRx / VRy swapped on the module, or use `E,JOYCAL`.
+* **Tilt wrong after mounting the board:** set `TILT_MOUNT_DEG` in `app_config.h` to how the board is turned on its mount, seen from above (90 = turned left, -90 = turned right, 180 = turned around). If pitch and roll both come out reversed, use the opposite sign.
 * **Anything odd after the clock change:** set `ENH_FAST_CLOCK 0`.
 
 Credits for third-party code and assets are in `THIRD_PARTY_NOTICES.md`.
